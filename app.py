@@ -8,10 +8,9 @@ st.set_page_config(page_title="BubbleDive", layout="wide")
 st.title("🌊 BubbleDive: Concept Explorer")
 st.caption("Powered by OpenAI GPT-4.1 with live web search.")
 
-# --- GPT CLIENT ---
 client = OpenAI()
 
-# --- HELPER: Truncate tooltips for bubbles ---
+# --- Helper: Truncate tooltips for bubbles ---
 def truncate_tooltip(tooltip, max_len=120):
     if not tooltip:
         return ""
@@ -21,15 +20,13 @@ def truncate_tooltip(tooltip, max_len=120):
     cutoff = tooltip[:max_len].rfind(" ")
     return tooltip[:cutoff] + "..." if cutoff > 0 else tooltip[:max_len] + "..."
 
-# --- Recursively process tree to truncate tooltips ---
 def process_tree_tooltips(tree, max_len=120):
-    tree = dict(tree)  # Copy to avoid side effects
+    tree = dict(tree)
     tree['tooltip'] = truncate_tooltip(tree.get('tooltip', ''), max_len)
     if 'children' in tree:
         tree['children'] = [process_tree_tooltips(child, max_len) for child in tree['children']]
     return tree
 
-# --- Robust JSON extraction ---
 def robust_json_extract(raw):
     try:
         return json.loads(raw)
@@ -42,7 +39,19 @@ def robust_json_extract(raw):
                 pass
     return None
 
-# --- Mindmap HTML (D3.js) ---
+def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
+    if nodes is None: nodes = []
+    if links is None: links = []
+    this_id = tree.get("name")
+    tooltip = tree.get("tooltip", "")
+    node_type = tree.get("type", "")
+    nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type})
+    if parent_name:
+        links.append({"source": parent_name, "target": this_id})
+    for child in tree.get("children", []) or []:
+        flatten_tree_to_nodes_links(child, this_id, nodes, links)
+    return nodes, links
+
 def create_multilevel_mindmap_html(tree, center_title="Root"):
     nodes, links = flatten_tree_to_nodes_links(tree)
     for n in nodes:
@@ -186,19 +195,42 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     """
     return mindmap_html
 
-# --- Flatten tree for D3 ---
-def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
-    if nodes is None: nodes = []
-    if links is None: links = []
-    this_id = tree.get("name")
-    tooltip = tree.get("tooltip", "")
-    node_type = tree.get("type", "")
-    nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type})
-    if parent_name:
-        links.append({"source": parent_name, "target": this_id})
-    for child in tree.get("children", []) or []:
-        flatten_tree_to_nodes_links(child, this_id, nodes, links)
-    return nodes, links
+# --- Helper: HTML Download ---
+def full_html_wrap(mindmap_html, citations, title="BubbleDive Mindmap"):
+    citations_html = "<h3>References</h3>\n<ul>"
+    for idx, cite in enumerate(citations, 1):
+        url = cite.get("url", "#")
+        title_cite = cite.get("title", url)
+        snippet = cite.get("snippet", "")
+        citations_html += f'<li><a href="{url}" target="_blank">{title_cite}</a>'
+        if snippet:
+            citations_html += f" – {snippet}"
+        citations_html += "</li>"
+    citations_html += "</ul>"
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>{title}</title>
+        <style>
+            body {{ background:#f7faff; font-family:sans-serif; padding:0; margin:0; }}
+            .container {{ width:100vw; max-width:1600px; margin:0 auto; padding:24px; }}
+            h1 {{ margin-bottom: 10px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>{title}</h1>
+            {mindmap_html}
+            <hr>
+            {citations_html}
+        </div>
+    </body>
+    </html>
+    """
+    return html
 
 # --- Prompt: Expand Concept using Web Search ---
 def prompt_expand_concept(concept):
@@ -228,11 +260,10 @@ with st.spinner("Generating mindmap with live web data..."):
         tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
         input=prompt,
     )
-    # Parse LLM output and citations
-    tree = None
-    citations = []
+    # Attribute-style for new SDK (not dict!)
     output_items = response.output
     output_text = ""
+    citations = []
     for item in output_items:
         if getattr(item, "type", "") == "message":
             for content in getattr(item, "content", []):
@@ -240,18 +271,26 @@ with st.spinner("Generating mindmap with live web data..."):
                     output_text = getattr(content, "text", "")
                     if hasattr(content, "annotations"):
                         citations = content.annotations
-
     tree = robust_json_extract(output_text)
     if not tree:
         st.error("Could not extract mindmap from model output.")
         st.stop()
 
-# --- Truncate tooltips (for all nodes) ---
+# --- Truncate tooltips for all nodes ---
 tree = process_tree_tooltips(tree, max_len=120)
 
 # --- Show Mindmap ---
 mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
 st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+
+# --- Download as HTML ---
+html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}")
+st.sidebar.download_button(
+    label="Download Mindmap as HTML",
+    data=html_file.encode("utf-8"),
+    file_name=f"{concept.replace(' ', '_')}_BubbleDive.html",
+    mime="text/html"
+)
 
 # --- Show References Below Map ---
 if citations:
