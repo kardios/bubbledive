@@ -3,14 +3,12 @@ from openai import OpenAI
 import json
 import re
 
-# --- CONFIG ---
 st.set_page_config(page_title="BubbleDive", layout="wide")
-st.title("🌊 BubbleDive: Concept Explorer")
-st.caption("Powered by OpenAI GPT-4.1 with live web search.")
+st.title("🌊 BubbleDive: Argument Explorer")
+st.caption("Surfacing controversies, open questions, and new debates—powered by GPT-4.1 with live web search.")
 
 client = OpenAI()
 
-# --- Helper: Truncate tooltips for bubbles ---
 def truncate_tooltip(tooltip, max_len=120):
     if not tooltip:
         return ""
@@ -195,7 +193,6 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     """
     return mindmap_html
 
-# --- Helper: HTML Download ---
 def full_html_wrap(mindmap_html, citations, title="BubbleDive Mindmap"):
     citations_html = "<h3>References</h3>\n<ul>"
     for idx, cite in enumerate(citations, 1):
@@ -232,35 +229,36 @@ def full_html_wrap(mindmap_html, citations, title="BubbleDive Mindmap"):
     """
     return html
 
-# --- Prompt: Expand Concept using Web Search ---
-def prompt_expand_concept(concept):
+def prompt_expand_concept_insightful(concept):
     return (
-        f"Generate a mindmap for the concept '{concept}' using the latest information from the web. "
-        "Root node should have a concise definition as tooltip (≤120 chars). "
-        "Add 3–6 major subtopics/types as children, each with a short summary as tooltip (≤120 chars). "
-        "Include related concepts, real-world applications, and current debates or controversies if any. "
-        "Return valid JSON: {{'name': '...', 'tooltip': '...', 'children': [...]}} "
-        "Cite your sources and output clickable references. Do NOT include citation numbers in tooltips or node names."
+        f"For the topic '{concept}', generate a mindmap that highlights the most interesting arguments, debates, controversies, open questions, and emerging trends—"
+        "not just a factual summary. Each node should be a genuinely thought-provoking topic, recent scholarly disagreement, revisionist interpretation, or "
+        "critical question in the field. Include: "
+        "- Major controversies or scholarly debates "
+        "- Myths or misunderstandings and their corrections "
+        "- Shifts in historical consensus or reinterpretations "
+        "- Links to modern relevance or current debates "
+        "- At least three nodes must be open questions or unresolved issues. "
+        "Root node should have a concise, punchy summary (≤120 chars). "
+        "Output as valid JSON: {{'name': '...', 'tooltip': '...', 'children': [...]}}"
+        "Cite sources and output clickable references. Do NOT include citation numbers in tooltips or node names."
     )
 
-# --- UI: Concept Input ---
 params = st.query_params
 default_concept = params.get("concept", [""])[0] if params.get("concept") else ""
-concept = st.text_input("🔎 Enter a concept to explore:", value=default_concept, key="concept_input")
+concept = st.text_input("🔎 Enter a topic or event:", value=default_concept, key="concept_input")
 
 if not concept.strip():
-    st.info("Enter a concept and press Enter to generate a mindmap.")
+    st.info("Enter a topic and press Enter to generate an argument/debate mindmap.")
     st.stop()
 
-# --- Call LLM with Web Search ---
-with st.spinner("Generating mindmap with live web data..."):
-    prompt = prompt_expand_concept(concept.strip())
+with st.spinner("Surfacing the most interesting arguments and controversies..."):
+    prompt = prompt_expand_concept_insightful(concept.strip())
     response = client.responses.create(
         model="gpt-4.1",
         tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
         input=prompt,
     )
-    # Attribute-style for new SDK (not dict!)
     output_items = response.output
     output_text = ""
     citations = []
@@ -276,14 +274,11 @@ with st.spinner("Generating mindmap with live web data..."):
         st.error("Could not extract mindmap from model output.")
         st.stop()
 
-# --- Truncate tooltips for all nodes ---
 tree = process_tree_tooltips(tree, max_len=120)
 
-# --- Show Mindmap ---
 mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
 st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
 
-# --- Download as HTML ---
 html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}")
 st.sidebar.download_button(
     label="Download Mindmap as HTML",
@@ -292,7 +287,6 @@ st.sidebar.download_button(
     mime="text/html"
 )
 
-# --- Show References Below Map ---
 if citations:
     st.markdown("### References")
     for idx, cite in enumerate(citations, 1):
