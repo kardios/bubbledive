@@ -256,43 +256,55 @@ default_context = params.get("context", [""])[0] if params.get("context") else "
 concept = st.text_input("🔎 Enter a topic or event:", value=default_concept, key="concept_input")
 context = default_context  # Not shown to user by default, but passed by bubble click
 
+# SESSION LOGIC
+needs_update = (
+    'last_concept' not in st.session_state or
+    st.session_state['last_concept'] != concept or
+    'mindmap_html' not in st.session_state or
+    'citations' not in st.session_state or
+    'html_file' not in st.session_state
+)
+
 if not concept.strip():
     st.info("Enter a topic and press Enter to generate an argument/debate mindmap.")
     st.stop()
 
-with st.spinner("Surfacing the most interesting arguments and controversies..."):
-    prompt = prompt_expand_concept_insightful(concept.strip(), context)
-    response = client.responses.create(
-        model="gpt-4.1",
-        tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
-        input=prompt,
-    )
-    output_items = response.output
-    output_text = ""
-    citations = []
-    for item in output_items:
-        if getattr(item, "type", "") == "message":
-            for content in getattr(item, "content", []):
-                if getattr(content, "type", "") == "output_text":
-                    output_text = getattr(content, "text", "")
-                    if hasattr(content, "annotations"):
-                        citations = content.annotations
-    tree = robust_json_extract(output_text)
-    if not tree:
-        st.error("Could not extract mindmap from model output.")
-        st.stop()
+if needs_update:
+    with st.spinner("Surfacing the most interesting arguments and controversies..."):
+        prompt = prompt_expand_concept_insightful(concept.strip(), context)
+        response = client.responses.create(
+            model="gpt-4.1",
+            tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
+            input=prompt,
+        )
+        output_items = response.output
+        output_text = ""
+        citations = []
+        for item in output_items:
+            if getattr(item, "type", "") == "message":
+                for content in getattr(item, "content", []):
+                    if getattr(content, "type", "") == "output_text":
+                        output_text = getattr(content, "text", "")
+                        if hasattr(content, "annotations"):
+                            citations = content.annotations
+        tree = robust_json_extract(output_text)
+        if not tree:
+            st.error("Could not extract mindmap from model output.")
+            st.stop()
+        tree = process_tree_tooltips(tree, max_len=120)
+        mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
+        html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}").encode("utf-8")
 
-tree = process_tree_tooltips(tree, max_len=120)
+        st.session_state['last_concept'] = concept
+        st.session_state['mindmap_html'] = mindmap_html
+        st.session_state['citations'] = citations
+        st.session_state['html_file'] = html_file
 
-mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
+mindmap_html = st.session_state['mindmap_html']
+citations = st.session_state['citations']
+html_file = st.session_state['html_file']
+
 st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
-
-# --- CACHED HTML FOR DOWNLOAD (fix: use _citations) ---
-@st.cache_data(show_spinner="Preparing HTML file...")
-def get_html_file_cached(mindmap_html, _citations, concept):
-    return full_html_wrap(mindmap_html, _citations, title=f"BubbleDive - {concept}").encode("utf-8")
-
-html_file = get_html_file_cached(mindmap_html, citations, concept)
 
 st.download_button(
     label="Download Mindmap as HTML",
