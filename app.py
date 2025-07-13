@@ -56,8 +56,10 @@ def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
     for n in nodes:
         n["group"] = 0 if n["id"] == center_title else 1
 
+    # For click: pass entire context string as 'concept'
     nodes_json = json.dumps(nodes)
     links_json = json.dumps(links)
+    user_topic_js = user_topic.replace("\\", "\\\\").replace("`", "\\`").replace('"', '\\"')  # Escape for JS string
     mindmap_html = f"""
     <div id="mindmap"></div>
     <style>
@@ -74,7 +76,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
     const links = {links_json};
     const width = 1400, height = 900;
     const rootID = "{center_title.replace('"', '\\"')}";
-    const userTopic = "{user_topic.replace('"', '\\"')}";
+    const userTopic = `{user_topic_js}`;
     function getNodeColor(type, id) {{
         if (id === rootID) return "#3B82F6"; // Central bubble color (blue)
         return "#fff";
@@ -120,10 +122,9 @@ def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
         }})
         .on("click", function(e, d) {{
             if (d.id === rootID) return; // Central bubble: do nothing
-            const topic = encodeURIComponent(userTopic);
-            const label = encodeURIComponent(d.id);
-            const tooltip = encodeURIComponent(d.tooltip || "");
-            window.open(`?topic=${{topic}}&label=${{label}}&tooltip=${{tooltip}}`, "_blank");
+            // Compose context for next dive
+            const inputString = userTopic + "\\n\\n" + d.id + "\\n\\n" + (d.tooltip || "");
+            window.open(`?concept=${{encodeURIComponent(inputString)}}`, "_blank");
         }});
 
     node.append("text")
@@ -251,7 +252,6 @@ def prompt_expand_concept_sparkmap(concept, context=""):
 # ---- Helper to robustly extract param ----
 def get_query_param(key):
     val = st.query_params.get(key, "")
-    st.write(f"DEBUG: key={key!r} val={val!r} type={type(val)}")  # <--- Debug output
     if isinstance(val, list):
         return val[0] if val else ""
     elif isinstance(val, str):
@@ -259,12 +259,14 @@ def get_query_param(key):
     return ""
 
 # ---- Query params ----
-topic = get_query_param("topic") or get_query_param("concept")
-label = get_query_param("label")
-tooltip = get_query_param("tooltip")
-context = get_query_param("context")
+concept = get_query_param("concept")
 
-concept = st.text_input("🔎 Enter a topic or event:", value=topic, key="concept_input")
+concept = st.text_area(
+    "🔎 Enter a topic or context (paste or type):",
+    value=concept,
+    height=110,
+    key="concept_input"
+)
 
 ss_key = f"sparkmap_{concept}"
 ss_cit_key = f"sparkmap_cit_{concept}"
@@ -272,7 +274,7 @@ ss_html_key = f"sparkmap_html_{concept}"
 ss_time_key = f"sparkmap_time_{concept}"
 
 if not concept.strip():
-    st.info("Enter a topic and press Enter to generate a Spark Map.")
+    st.info("Enter a topic or paste context, then press Enter to generate a Spark Map.")
     st.stop()
 
 if (
@@ -281,7 +283,7 @@ if (
     ss_html_key not in st.session_state or
     ss_time_key not in st.session_state
 ):
-    prompt = prompt_expand_concept_sparkmap(concept.strip(), context)
+    prompt = prompt_expand_concept_sparkmap(concept.strip())
     t0 = time.perf_counter()
     with st.spinner("Generating Spark Map..."):
         response = client.responses.create(
