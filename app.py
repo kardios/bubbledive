@@ -66,7 +66,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     const rootID = "{center_title_js}";
 
     function getNodeColor(type, id) {{
-        if (id === rootID) return "#93c5fd"; // lighter blue
+        if (id === rootID) return "#93c5fd";
         return "#fff";
     }}
 
@@ -93,7 +93,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
         .attr("class", "node");
 
     node.append("circle")
-        .attr("r", d => d.id === rootID ? 110 : 75)
+        .attr("r", d => d.id === rootID ? 130 : 75)
         .attr("fill", d => getNodeColor(d.type, d.id))
         .attr("stroke", "#528fff").attr("stroke-width", 3)
         .on("mouseover", function(e, d) {{
@@ -128,10 +128,11 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
 
     node.append("text")
         .attr("text-anchor", "middle")
-        .style("font-size", d => d.id === rootID ? "1.4em" : "1.08em")
         .each(function(d) {{
             const text = d3.select(this);
-            const maxChars = d.id === rootID ? 24 : 16;
+            const maxChars = 16; // Aggressive wrapping for all
+            const maxLines = 4; // For all
+            const fontSize = d.id === rootID ? 18 : 16; // px
             const label = d.id;
             const words = label.split(' ');
             let lines = [];
@@ -146,14 +147,14 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
             }});
             if (current.trim()) lines.push(current.trim());
 
-            // --- Prevent overflow ---
-            const maxLines = 3;
-            let safeLines = lines.slice(0, maxLines);
             if (lines.length > maxLines) {{
-                safeLines[maxLines - 1] = safeLines[maxLines - 1] + "...";
+                lines = lines.slice(0, maxLines);
+                lines[maxLines - 1] += "...";
             }}
-            const startDy = d.id === rootID ? -((safeLines.length - 1) / 2) * 1.1 : 0;
-            safeLines.forEach((line, i) => {{
+            text.style("font-size", fontSize + "px");
+
+            const startDy = -((lines.length - 1) / 2) * 1.1;
+            lines.forEach((line, i) => {{
                 text.append("tspan")
                     .attr("x", 0)
                     .attr("dy", i === 0 ? `${{startDy}}em` : "1.1em")
