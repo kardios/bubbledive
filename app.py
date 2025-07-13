@@ -287,10 +287,16 @@ tree = process_tree_tooltips(tree, max_len=120)
 mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
 st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
 
-html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}")
+# --- CACHED HTML FOR DOWNLOAD ---
+@st.cache_data(show_spinner="Preparing HTML file...")
+def get_html_file_cached(mindmap_html, citations, concept):
+    return full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}").encode("utf-8")
+
+html_file = get_html_file_cached(mindmap_html, citations, concept)
+
 st.download_button(
     label="Download Mindmap as HTML",
-    data=html_file.encode("utf-8"),
+    data=html_file,
     file_name=f"{concept.replace(' ', '_')}_BubbleDive.html",
     mime="text/html"
 )
