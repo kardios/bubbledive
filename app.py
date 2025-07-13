@@ -41,7 +41,7 @@ def robust_json_extract(raw):
 def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
     if nodes is None: nodes = []
     if links is None: links = []
-    this_id = tree.get("name")  # <-- always full string
+    this_id = tree.get("name")
     tooltip = tree.get("tooltip", "")
     node_type = tree.get("type", "")
     nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type})
@@ -58,7 +58,6 @@ def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
 
     nodes_json = json.dumps(nodes)
     links_json = json.dumps(links)
-    # Inject user's topic as JS var:
     mindmap_html = f"""
     <div id="mindmap"></div>
     <style>
@@ -75,8 +74,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
     const links = {links_json};
     const width = 1400, height = 900;
     const rootID = "{center_title.replace('"', '\\"')}";
-    const userTopic = "{user_topic.replace('"', '\\"')}"; // <-- CHANGED
-
+    const userTopic = "{user_topic.replace('"', '\\"')}";
     function getNodeColor(type, id) {{
         if (id === rootID) return "#3B82F6"; // Central bubble color (blue)
         return "#fff";
@@ -121,7 +119,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
             tooltip.style("opacity", 0);
         }})
         .on("click", function(e, d) {{
-            if (d.id === rootID) return; // Do nothing if central bubble
+            if (d.id === rootID) return; // Central bubble: do nothing
             const topic = encodeURIComponent(userTopic);
             const label = encodeURIComponent(d.id);
             const tooltip = encodeURIComponent(d.tooltip || "");
@@ -250,12 +248,23 @@ def prompt_expand_concept_sparkmap(concept, context=""):
         "End with clickable source references."
     )
 
-# --- Main UI ---
-params = st.query_params
-default_concept = params.get("topic", [""])[0] if params.get("topic") else params.get("concept", [""])[0] if params.get("concept") else ""
-default_context = params.get("context", [""])[0] if params.get("context") else ""
-concept = st.text_input("🔎 Enter a topic or event:", value=default_concept, key="concept_input")
-context = default_context
+# ---- Helper to robustly extract param ----
+def get_query_param(key):
+    val = st.query_params.get(key, "")
+    st.write(f"DEBUG: key={key!r} val={val!r} type={type(val)}")  # <--- Debug output
+    if isinstance(val, list):
+        return val[0] if val else ""
+    elif isinstance(val, str):
+        return val
+    return ""
+
+# ---- Query params ----
+topic = get_query_param("topic") or get_query_param("concept")
+label = get_query_param("label")
+tooltip = get_query_param("tooltip")
+context = get_query_param("context")
+
+concept = st.text_input("🔎 Enter a topic or event:", value=topic, key="concept_input")
 
 ss_key = f"sparkmap_{concept}"
 ss_cit_key = f"sparkmap_cit_{concept}"
@@ -296,7 +305,7 @@ if (
         st.error("Could not extract Spark Map from model output.")
         st.stop()
     tree = process_tree_tooltips(tree, max_len=120)
-    mindmap_html = create_multilevel_mindmap_html(tree, center_title=tree["name"], user_topic=concept)  # <-- CHANGED
+    mindmap_html = create_multilevel_mindmap_html(tree, center_title=tree["name"], user_topic=concept)
     html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive Spark Map - {concept}").encode("utf-8")
 
     st.session_state[ss_key] = mindmap_html
