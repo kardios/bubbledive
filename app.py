@@ -10,7 +10,6 @@ st.caption("Distill any topic into its five most powerful insights. Click bubble
 
 client = OpenAI()
 
-# --- Utility Functions ---
 def truncate_tooltip(tooltip, max_len=120):
     if not tooltip:
         return ""
@@ -42,7 +41,7 @@ def robust_json_extract(raw):
 def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
     if nodes is None: nodes = []
     if links is None: links = []
-    this_id = tree.get("name")
+    this_id = tree.get("name")  # <-- always full string
     tooltip = tree.get("tooltip", "")
     node_type = tree.get("type", "")
     nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type})
@@ -52,13 +51,14 @@ def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
         flatten_tree_to_nodes_links(child, this_id, nodes, links)
     return nodes, links
 
-def create_multilevel_mindmap_html(tree, center_title="Root"):
+def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
     nodes, links = flatten_tree_to_nodes_links(tree)
     for n in nodes:
         n["group"] = 0 if n["id"] == center_title else 1
 
     nodes_json = json.dumps(nodes)
     links_json = json.dumps(links)
+    # Inject user's topic as JS var:
     mindmap_html = f"""
     <div id="mindmap"></div>
     <style>
@@ -75,6 +75,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     const links = {links_json};
     const width = 1400, height = 900;
     const rootID = "{center_title.replace('"', '\\"')}";
+    const userTopic = "{user_topic.replace('"', '\\"')}"; // <-- CHANGED
 
     function getNodeColor(type, id) {{
         if (id === rootID) return "#3B82F6"; // Central bubble color (blue)
@@ -121,9 +122,10 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
         }})
         .on("click", function(e, d) {{
             if (d.id === rootID) return; // Do nothing if central bubble
-            const nodeName = encodeURIComponent(d.id);
-            const nodeTooltip = encodeURIComponent(d.tooltip || "");
-            window.open(`?concept=${{nodeName}}&context=${{nodeTooltip}}`, "_blank");
+            const topic = encodeURIComponent(userTopic);
+            const label = encodeURIComponent(d.id);
+            const tooltip = encodeURIComponent(d.tooltip || "");
+            window.open(`?topic=${{topic}}&label=${{label}}&tooltip=${{tooltip}}`, "_blank");
         }});
 
     node.append("text")
@@ -235,7 +237,6 @@ def full_html_wrap(mindmap_html, citations, title="BubbleDive Spark Map"):
     """
     return html
 
-# --- Spark Map Prompt ---
 def prompt_expand_concept_sparkmap(concept, context=""):
     context_instruction = f"Context: {context}. " if context else ""
     return (
@@ -251,10 +252,10 @@ def prompt_expand_concept_sparkmap(concept, context=""):
 
 # --- Main UI ---
 params = st.query_params
-default_concept = params.get("concept", [""])[0] if params.get("concept") else ""
+default_concept = params.get("topic", [""])[0] if params.get("topic") else params.get("concept", [""])[0] if params.get("concept") else ""
 default_context = params.get("context", [""])[0] if params.get("context") else ""
 concept = st.text_input("🔎 Enter a topic or event:", value=default_concept, key="concept_input")
-context = default_context  # For bubble clicks
+context = default_context
 
 ss_key = f"sparkmap_{concept}"
 ss_cit_key = f"sparkmap_cit_{concept}"
@@ -295,8 +296,7 @@ if (
         st.error("Could not extract Spark Map from model output.")
         st.stop()
     tree = process_tree_tooltips(tree, max_len=120)
-    tree['name'] = concept  # Ensure central bubble text is user input!
-    mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
+    mindmap_html = create_multilevel_mindmap_html(tree, center_title=tree["name"], user_topic=concept)  # <-- CHANGED
     html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive Spark Map - {concept}").encode("utf-8")
 
     st.session_state[ss_key] = mindmap_html
