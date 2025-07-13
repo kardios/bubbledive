@@ -8,6 +8,11 @@ st.set_page_config(page_title="BubbleDive Spark Map", layout="wide")
 st.title("🌊 BubbleDive: Spark Map")
 st.caption("Distill any topic into its most powerful insights. Click bubbles to dive deeper.")
 
+# --- Reset Button ---
+if st.button("🔄 Start a New Spark Map"):
+    st.query_params.clear()
+    st.rerun()
+
 client = OpenAI()
 
 def truncate_tooltip(tooltip, max_len=120):
@@ -66,7 +71,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     const rootID = "{center_title_js}";
 
     function getNodeColor(type, id) {{
-        if (id === rootID) return "#93c5fd";
+        if (id === rootID) return "#93c5fd"; // lighter blue for central node
         return "#fff";
     }}
 
@@ -130,8 +135,8 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
         .attr("text-anchor", "middle")
         .each(function(d) {{
             const text = d3.select(this);
-            const maxChars = 16; // Aggressive wrapping for all
-            const maxLines = 4; // For all
+            const maxChars = 16;
+            const maxLines = 4;
             const fontSize = d.id === rootID ? 18 : 16; // px
             const label = d.id;
             const words = label.split(' ');
@@ -146,13 +151,11 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
                 }}
             }});
             if (current.trim()) lines.push(current.trim());
-
             if (lines.length > maxLines) {{
                 lines = lines.slice(0, maxLines);
                 lines[maxLines - 1] += "...";
             }}
             text.style("font-size", fontSize + "px");
-
             const startDy = -((lines.length - 1) / 2) * 1.1;
             lines.forEach((line, i) => {{
                 text.append("tspan")
@@ -319,12 +322,12 @@ else:
     topic = get_query_param("concept")
 
 if not topic or not topic.strip():
-    topic = st.text_input("🔎 Enter a topic or event:", value="", key="concept_input")
+    topic = st.text_input("Enter a topic:", value="", key="concept_input")
     if not topic.strip():
         st.info("Enter a topic and press Enter to generate a Spark Map.")
         st.stop()
 else:
-    topic = st.text_input("🔎 Enter a topic or event:", value=topic, key="concept_input")
+    topic = st.text_input("Enter a topic:", value=topic, key="concept_input")
 
 ss_key = f"sparkmap_{topic}"
 ss_cit_key = f"sparkmap_cit_{topic}"
@@ -338,6 +341,7 @@ if (
     ss_time_key not in st.session_state
 ):
     prompt = prompt_expand_concept_sparkmap(topic.strip())
+    progress = st.progress(0, text="Generating Spark Map...")
     t0 = time.perf_counter()
     with st.spinner("Generating Spark Map..."):
         response = client.responses.create(
@@ -345,6 +349,7 @@ if (
             tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
             input=prompt,
         )
+        progress.progress(100, text="Done!")
     t1 = time.perf_counter()
     output_items = response.output
     output_text = ""
@@ -362,6 +367,8 @@ if (
         st.stop()
     tree = process_tree_tooltips(tree, max_len=120)
     mindmap_html = create_multilevel_mindmap_html(tree, center_title=tree["name"])
+    # --- Safe filename for download ---
+    safe_filename = re.sub(r'[^A-Za-z0-9_]+', '', topic.replace(' ', '_'))
     html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive Spark Map - {topic}").encode("utf-8")
 
     st.session_state[ss_key] = mindmap_html
@@ -378,10 +385,12 @@ st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
 
 st.markdown(f"**Generation time:** {elapsed:.2f} seconds")
 
+# --- Use safe file name for download ---
+safe_filename = re.sub(r'[^A-Za-z0-9_]+', '', topic.replace(' ', '_'))
 st.download_button(
     label="Download Spark Map as HTML",
     data=html_file,
-    file_name=f"{topic.replace(' ', '_')}_BubbleDive_SparkMap.html",
+    file_name=f"{safe_filename}_BubbleDive_SparkMap.html",
     mime="text/html"
 )
 
