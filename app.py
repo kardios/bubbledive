@@ -137,7 +137,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
             const text = d3.select(this);
             const maxChars = 16;
             const maxLines = 4;
-            const fontSize = d.id === rootID ? 18 : 16; // px
+            const fontSize = d.id === rootID ? 24 : 20; // px
             const label = d.id;
             const words = label.split(' ');
             let lines = [];
