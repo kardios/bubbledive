@@ -77,7 +77,8 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     const rootID = "{center_title.replace('"', '\\"')}";
 
     function getNodeColor(type, id) {{
-        return id === rootID ? "#eaf0fe" : "#fff";
+        if (id === rootID) return "#3B82F6"; // Central bubble color (blue)
+        return "#fff";
     }}
 
     const svg = d3.select("#mindmap").append("svg")
@@ -119,7 +120,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
             tooltip.style("opacity", 0);
         }})
         .on("click", function(e, d) {{
-            // Pass both node name and tooltip as query params, full encode
+            if (d.id === rootID) return; // Do nothing if central bubble
             const nodeName = encodeURIComponent(d.id);
             const nodeTooltip = encodeURIComponent(d.tooltip || "");
             window.open(`?concept=${{nodeName}}&context=${{nodeTooltip}}`, "_blank");
@@ -130,8 +131,9 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
         .style("font-size", d => d.id === rootID ? "1.4em" : "1.08em")
         .each(function(d) {{
             const text = d3.select(this);
-            const maxChars = d.id === rootID ? 14 : 16;
-            const words = d.id.split(' ');
+            const maxChars = d.id === rootID ? 24 : 16;
+            const label = d.id;
+            const words = label.split(' ');
             let lines = [];
             let current = '';
             words.forEach(word => {{
@@ -293,6 +295,7 @@ if (
         st.error("Could not extract Spark Map from model output.")
         st.stop()
     tree = process_tree_tooltips(tree, max_len=120)
+    tree['name'] = concept  # Ensure central bubble text is user input!
     mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
     html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive Spark Map - {concept}").encode("utf-8")
 
@@ -326,4 +329,4 @@ if citations:
         st.markdown(f"{idx}. [{title}]({url})" + (f" – {snippet}" if snippet else ""))
 
 st.markdown("---")
-st.caption("BubbleDive © 2025. Click any bubble to expand it in a new tab.")
+st.caption("BubbleDive © 2025. Click any bubble to expand it in a new tab (except the center one).")
