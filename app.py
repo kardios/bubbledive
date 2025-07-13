@@ -6,11 +6,10 @@ import time
 
 st.set_page_config(page_title="BubbleDive Spark Map", layout="wide")
 st.title("🌊 BubbleDive: Spark Map")
-st.caption("Distill any topic into its five most powerful insights. Click bubbles to dive deeper.")
+st.caption("Distill any topic into its most powerful insights. Click bubbles to dive deeper.")
 
 client = OpenAI()
 
-# --- Utility for tooltips ---
 def truncate_tooltip(tooltip, max_len=120):
     if not tooltip:
         return ""
@@ -27,14 +26,12 @@ def process_tree_tooltips(tree, max_len=120):
         tree['children'] = [process_tree_tooltips(child, max_len) for child in tree['children']]
     return tree
 
-# --- Flatten tree with parent tracking ---
 def flatten_tree_to_nodes_links(tree, parent_name=None, parent_tooltip=None, nodes=None, links=None):
     if nodes is None: nodes = []
     if links is None: links = []
     this_id = tree.get("name")
     tooltip = tree.get("tooltip", "")
     node_type = tree.get("type", "")
-    # Store parent name/tooltip for D3 (to send up context chain on click)
     nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type,
                   "parent": parent_name, "parent_tooltip": parent_tooltip})
     if parent_name:
@@ -48,7 +45,6 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     for n in nodes:
         n["group"] = 0 if n["id"] == center_title else 1
 
-    # For click: send full bubble, parent, and root info as JSON string in URL param
     nodes_json = json.dumps(nodes)
     links_json = json.dumps(links)
     center_title_js = center_title.replace("\\", "\\\\").replace("`", "\\`").replace('"', '\\"')
@@ -70,7 +66,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     const rootID = "{center_title_js}";
 
     function getNodeColor(type, id) {{
-        if (id === rootID) return "#3B82F6"; // Central bubble color (blue)
+        if (id === rootID) return "#3B82F6"; // Center: blue
         return "#fff";
     }}
 
@@ -114,7 +110,6 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
         }})
         .on("click", function(e, d) {{
             if (d.id === rootID) return; // Central bubble: do nothing
-            // Gather context: clicked, parent (if not root), root
             let contextObj = {{
                 clicked_label: d.id,
                 clicked_tooltip: d.tooltip,
@@ -123,7 +118,6 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
                 root_label: rootID,
                 root_tooltip: nodes.find(n=>n.id===rootID)?.tooltip || ""
             }};
-            // Remove parent if parent is root (avoid redundancy)
             if (d.parent === rootID) {{
                 contextObj.parent_label = "";
                 contextObj.parent_tooltip = "";
@@ -244,13 +238,17 @@ def full_html_wrap(mindmap_html, citations, title="BubbleDive Spark Map"):
 def prompt_expand_concept_sparkmap(concept, context=""):
     context_instruction = f"Context: {context}. " if context else ""
     return (
-        f"You are a master teacher whose goal is to make smart people care about and remember the topic '{concept}'. {context_instruction}"
-        "Create a Spark Map that distills the topic into the 5 most powerful insights—each a key idea that changes how people see the subject, reveals something surprising, or corrects a big myth. "
-        "For each main bubble, provide a short, striking label (max 8 words) and a 1-sentence tooltip that explains why this is an 'aha!' or perspective shift. "
-        "For each main insight, add 2-3 supporting sub-bubbles with memorable examples, surprising facts, analogies, or famous misconceptions. "
-        "Keep all tooltips short, punchy, and designed to spark further curiosity—not just summarize. "
-        "Do NOT include neutral background or padding; only what sparks learning and interest. "
-        "Output as valid JSON: {{'name': '...', 'tooltip': '...', 'children': [...]}}"
+        f"You are a master educator. Your task is to create a Spark Map mindmap about '{concept}'. {context_instruction}"
+        "A Spark Map distills any topic into its 5 to 7 most powerful, perspective-shifting insights. "
+        "Each main bubble must deliver an 'aha!' moment: a surprising fact, myth-buster, or insight that changes how a smart person sees the topic. "
+        "For each main bubble, provide a short, striking label (max 8 words) and a 1-sentence tooltip that explains why it matters or is surprising. "
+        "For each main insight, add 2–3 sub-bubbles: each must be an example, famous misconception, analogy, bold comparison, or surprising detail (not just background or generic info). "
+        "If and only if a sub-bubble’s idea is complex, you may add 1–2 supporting details beneath it—do not add a third level unless it makes the map significantly more enlightening. "
+        "Do not overload any single branch. If you cannot find 7 main insights, fewer is better; never pad with weak ideas. "
+        "At least one main bubble should compare or contrast this topic with others, or highlight a dramatic trend or change over time. "
+        "Use the ‘Spark Test’: Would an expert say ‘I didn’t know that!’ or ‘That changes my perspective’? If not, replace it with something stronger. "
+        "Keep all tooltips short, punchy, and designed to spark further curiosity. "
+        "Output the entire map as valid JSON: {'name': '...', 'tooltip': '...', 'children': [...]}. "
         "End with clickable source references."
     )
 
@@ -293,12 +291,10 @@ def get_query_param(key):
     return ""
 
 # ---- Main logic ----
-# New tab click: receives context as JSON string in ?context= param
 context_json = get_query_param("context")
 if context_json:
     try:
         context_obj = json.loads(context_json)
-        # LLM condenses the chain into a topic
         with st.spinner("Condensing for next dive..."):
             topic = condense_bubble_context(
                 context_obj.get("clicked_label", ""),
@@ -323,10 +319,6 @@ ss_key = f"sparkmap_{topic}"
 ss_cit_key = f"sparkmap_cit_{topic}"
 ss_html_key = f"sparkmap_html_{topic}"
 ss_time_key = f"sparkmap_time_{topic}"
-
-if not topic.strip():
-    st.info("Enter a topic and press Enter to generate a Spark Map.")
-    st.stop()
 
 if (
     ss_key not in st.session_state or
