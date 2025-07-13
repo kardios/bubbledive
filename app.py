@@ -212,7 +212,7 @@ def prompt_expand_concept(concept):
     )
 
 # --- UI: Concept Input ---
-params = st.experimental_get_query_params()
+params = st.query_params
 default_concept = params.get("concept", [""])[0] if params.get("concept") else ""
 concept = st.text_input("🔎 Enter a concept to explore:", value=default_concept, key="concept_input")
 
