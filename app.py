@@ -117,8 +117,10 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
             tooltip.style("opacity", 0);
         }})
         .on("click", function(e, d) {{
+            // Pass both node name and tooltip as query params, full encode
             const nodeName = encodeURIComponent(d.id);
-            window.open(`?concept=${{nodeName}}`, "_blank");
+            const nodeTooltip = encodeURIComponent(d.tooltip || "");
+            window.open(`?concept=${{nodeName}}&context=${{nodeTooltip}}`, "_blank");
         }});
 
     node.append("text")
@@ -229,9 +231,13 @@ def full_html_wrap(mindmap_html, citations, title="BubbleDive Mindmap"):
     """
     return html
 
-def prompt_expand_concept_insightful(concept):
+def prompt_expand_concept_insightful(concept, context=""):
+    context_instruction = ""
+    if context:
+        context_instruction = f"Context: {context}. "
     return (
-        f"For the topic '{concept}', generate a mindmap that highlights the most interesting arguments, debates, controversies, open questions, and emerging trends—"
+        f"For the topic '{concept}', {context_instruction}"
+        "generate a mindmap that highlights the most interesting arguments, debates, controversies, open questions, and emerging trends—"
         "not just a factual summary. Each node should be a genuinely thought-provoking topic, recent scholarly disagreement, revisionist interpretation, or "
         "critical question in the field. Include: "
         "- Major controversies or scholarly debates "
@@ -246,14 +252,16 @@ def prompt_expand_concept_insightful(concept):
 
 params = st.query_params
 default_concept = params.get("concept", [""])[0] if params.get("concept") else ""
+default_context = params.get("context", [""])[0] if params.get("context") else ""
 concept = st.text_input("🔎 Enter a topic or event:", value=default_concept, key="concept_input")
+context = default_context  # Not shown to user by default, but passed by bubble click
 
 if not concept.strip():
     st.info("Enter a topic and press Enter to generate an argument/debate mindmap.")
     st.stop()
 
 with st.spinner("Surfacing the most interesting arguments and controversies..."):
-    prompt = prompt_expand_concept_insightful(concept.strip())
+    prompt = prompt_expand_concept_insightful(concept.strip(), context)
     response = client.responses.create(
         model="gpt-4.1",
         tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
@@ -280,7 +288,7 @@ mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
 st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
 
 html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}")
-st.sidebar.download_button(
+st.download_button(
     label="Download Mindmap as HTML",
     data=html_file.encode("utf-8"),
     file_name=f"{concept.replace(' ', '_')}_BubbleDive.html",
