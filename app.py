@@ -234,12 +234,13 @@ with st.spinner("Generating mindmap with live web data..."):
     output_items = response.output
     output_text = ""
     for item in output_items:
-        if item["type"] == "message":
-            for content in item["content"]:
-                if content["type"] == "output_text":
-                    output_text = content["text"]
-                    if "annotations" in content:
-                        citations = content["annotations"]
+        if getattr(item, "type", "") == "message":
+            for content in getattr(item, "content", []):
+                if getattr(content, "type", "") == "output_text":
+                    output_text = getattr(content, "text", "")
+                    if hasattr(content, "annotations"):
+                        citations = content.annotations
+
     tree = robust_json_extract(output_text)
     if not tree:
         st.error("Could not extract mindmap from model output.")
