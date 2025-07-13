@@ -66,7 +66,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     const rootID = "{center_title_js}";
 
     function getNodeColor(type, id) {{
-        if (id === rootID) return "#3B82F6"; // Center: blue
+        if (id === rootID) return "#93c5fd"; // lighter blue
         return "#fff";
     }}
 
@@ -145,8 +145,15 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
                 }}
             }});
             if (current.trim()) lines.push(current.trim());
-            const startDy = d.id === rootID ? -((lines.length - 1) / 2) * 1.1 : 0;
-            lines.forEach((line, i) => {{
+
+            // --- Prevent overflow ---
+            const maxLines = 3;
+            let safeLines = lines.slice(0, maxLines);
+            if (lines.length > maxLines) {{
+                safeLines[maxLines - 1] = safeLines[maxLines - 1] + "...";
+            }}
+            const startDy = d.id === rootID ? -((safeLines.length - 1) / 2) * 1.1 : 0;
+            safeLines.forEach((line, i) => {{
                 text.append("tspan")
                     .attr("x", 0)
                     .attr("dy", i === 0 ? `${{startDy}}em` : "1.1em")
