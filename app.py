@@ -298,9 +298,9 @@ st.download_button(
 if citations:
     st.markdown("### References")
     for idx, cite in enumerate(citations, 1):
-        url = cite.get("url", "#")
-        title = cite.get("title", url)
-        snippet = cite.get("snippet", "")
+        url = getattr(cite, "url", "#")
+        title = getattr(cite, "title", url)
+        snippet = getattr(cite, "snippet", "")
         st.markdown(f"{idx}. [{title}]({url})" + (f" – {snippet}" if snippet else ""))
 
 st.markdown("---")
