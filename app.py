@@ -10,6 +10,7 @@ st.caption("Distill any topic into its five most powerful insights. Click bubble
 
 client = OpenAI()
 
+# --- Utility for tooltips ---
 def truncate_tooltip(tooltip, max_len=120):
     if not tooltip:
         return ""
@@ -26,40 +27,31 @@ def process_tree_tooltips(tree, max_len=120):
         tree['children'] = [process_tree_tooltips(child, max_len) for child in tree['children']]
     return tree
 
-def robust_json_extract(raw):
-    try:
-        return json.loads(raw)
-    except Exception:
-        m = re.search(r'(\{[\s\S]+\})', raw)
-        if m:
-            try:
-                return json.loads(m.group(1))
-            except Exception:
-                pass
-    return None
-
-def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
+# --- Flatten tree with parent tracking ---
+def flatten_tree_to_nodes_links(tree, parent_name=None, parent_tooltip=None, nodes=None, links=None):
     if nodes is None: nodes = []
     if links is None: links = []
     this_id = tree.get("name")
     tooltip = tree.get("tooltip", "")
     node_type = tree.get("type", "")
-    nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type})
+    # Store parent name/tooltip for D3 (to send up context chain on click)
+    nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type,
+                  "parent": parent_name, "parent_tooltip": parent_tooltip})
     if parent_name:
         links.append({"source": parent_name, "target": this_id})
     for child in tree.get("children", []) or []:
-        flatten_tree_to_nodes_links(child, this_id, nodes, links)
+        flatten_tree_to_nodes_links(child, this_id, tooltip, nodes, links)
     return nodes, links
 
-def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
+def create_multilevel_mindmap_html(tree, center_title="Root"):
     nodes, links = flatten_tree_to_nodes_links(tree)
     for n in nodes:
         n["group"] = 0 if n["id"] == center_title else 1
 
-    # For click: pass entire context string as 'concept'
+    # For click: send full bubble, parent, and root info as JSON string in URL param
     nodes_json = json.dumps(nodes)
     links_json = json.dumps(links)
-    user_topic_js = user_topic.replace("\\", "\\\\").replace("`", "\\`").replace('"', '\\"')  # Escape for JS string
+    center_title_js = center_title.replace("\\", "\\\\").replace("`", "\\`").replace('"', '\\"')
     mindmap_html = f"""
     <div id="mindmap"></div>
     <style>
@@ -75,8 +67,8 @@ def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
     const nodes = {nodes_json};
     const links = {links_json};
     const width = 1400, height = 900;
-    const rootID = "{center_title.replace('"', '\\"')}";
-    const userTopic = `{user_topic_js}`;
+    const rootID = "{center_title_js}";
+
     function getNodeColor(type, id) {{
         if (id === rootID) return "#3B82F6"; // Central bubble color (blue)
         return "#fff";
@@ -122,9 +114,22 @@ def create_multilevel_mindmap_html(tree, center_title="Root", user_topic=""):
         }})
         .on("click", function(e, d) {{
             if (d.id === rootID) return; // Central bubble: do nothing
-            // Compose context for next dive
-            const inputString = userTopic + "\\n\\n" + d.id + "\\n\\n" + (d.tooltip || "");
-            window.open(`?concept=${{encodeURIComponent(inputString)}}`, "_blank");
+            // Gather context: clicked, parent (if not root), root
+            let contextObj = {{
+                clicked_label: d.id,
+                clicked_tooltip: d.tooltip,
+                parent_label: d.parent,
+                parent_tooltip: d.parent_tooltip,
+                root_label: rootID,
+                root_tooltip: nodes.find(n=>n.id===rootID)?.tooltip || ""
+            }};
+            // Remove parent if parent is root (avoid redundancy)
+            if (d.parent === rootID) {{
+                contextObj.parent_label = "";
+                contextObj.parent_tooltip = "";
+            }}
+            const contextString = encodeURIComponent(JSON.stringify(contextObj));
+            window.open(`?context=${{contextString}}`, "_blank");
         }});
 
     node.append("text")
@@ -249,7 +254,36 @@ def prompt_expand_concept_sparkmap(concept, context=""):
         "End with clickable source references."
     )
 
-# ---- Helper to robustly extract param ----
+def condense_bubble_context(clicked_label, clicked_tooltip, parent_label, parent_tooltip, root_label, root_tooltip):
+    prompt = (
+        "You are a learning assistant. Given the following information from a mindmap, generate a single, specific topic or phrase (max 10 words) that focuses on the 'Clicked Bubble', using the Parent and Topic for context if needed. This phrase will become the root of a new Spark Map.\n\n"
+        f"Clicked Bubble:\n{clicked_label}\n{clicked_tooltip}\n\n"
+        f"Parent:\n{parent_label}\n{parent_tooltip}\n\n"
+        f"Topic:\n{root_label}\n{root_tooltip}\n\n"
+        "Instructions:\n"
+        "- Focus on the Clicked Bubble.\n"
+        "- Use Parent and Topic only to clarify meaning or specify context.\n"
+        "- Output only a concise topic phrase—no questions, no sentences, no summaries."
+    )
+    response = client.responses.create(
+        model="gpt-4.1",
+        input=prompt,
+    )
+    topic = response.output[0].content[0].text.strip().split('\n')[0]
+    return topic
+
+def robust_json_extract(raw):
+    try:
+        return json.loads(raw)
+    except Exception:
+        m = re.search(r'(\{[\s\S]+\})', raw)
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except Exception:
+                pass
+    return None
+
 def get_query_param(key):
     val = st.query_params.get(key, "")
     if isinstance(val, list):
@@ -258,23 +292,40 @@ def get_query_param(key):
         return val
     return ""
 
-# ---- Query params ----
-concept = get_query_param("concept")
+# ---- Main logic ----
+# New tab click: receives context as JSON string in ?context= param
+context_json = get_query_param("context")
+if context_json:
+    try:
+        context_obj = json.loads(context_json)
+        # LLM condenses the chain into a topic
+        with st.spinner("Condensing for next dive..."):
+            topic = condense_bubble_context(
+                context_obj.get("clicked_label", ""),
+                context_obj.get("clicked_tooltip", ""),
+                context_obj.get("parent_label", ""),
+                context_obj.get("parent_tooltip", ""),
+                context_obj.get("root_label", ""),
+                context_obj.get("root_tooltip", ""),
+            )
+    except Exception as e:
+        st.warning("Could not parse context. Showing as plain text.")
+        topic = context_json
+else:
+    topic = get_query_param("concept")
 
-concept = st.text_area(
-    "🔎 Enter a topic or context (paste or type):",
-    value=concept,
-    height=110,
-    key="concept_input"
-)
+if not topic:
+    topic = st.text_input("🔎 Enter a topic or event:", value="", key="concept_input")
+else:
+    topic = st.text_input("🔎 Enter a topic or event:", value=topic, key="concept_input")
 
-ss_key = f"sparkmap_{concept}"
-ss_cit_key = f"sparkmap_cit_{concept}"
-ss_html_key = f"sparkmap_html_{concept}"
-ss_time_key = f"sparkmap_time_{concept}"
+ss_key = f"sparkmap_{topic}"
+ss_cit_key = f"sparkmap_cit_{topic}"
+ss_html_key = f"sparkmap_html_{topic}"
+ss_time_key = f"sparkmap_time_{topic}"
 
-if not concept.strip():
-    st.info("Enter a topic or paste context, then press Enter to generate a Spark Map.")
+if not topic.strip():
+    st.info("Enter a topic and press Enter to generate a Spark Map.")
     st.stop()
 
 if (
@@ -283,7 +334,7 @@ if (
     ss_html_key not in st.session_state or
     ss_time_key not in st.session_state
 ):
-    prompt = prompt_expand_concept_sparkmap(concept.strip())
+    prompt = prompt_expand_concept_sparkmap(topic.strip())
     t0 = time.perf_counter()
     with st.spinner("Generating Spark Map..."):
         response = client.responses.create(
@@ -307,8 +358,8 @@ if (
         st.error("Could not extract Spark Map from model output.")
         st.stop()
     tree = process_tree_tooltips(tree, max_len=120)
-    mindmap_html = create_multilevel_mindmap_html(tree, center_title=tree["name"], user_topic=concept)
-    html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive Spark Map - {concept}").encode("utf-8")
+    mindmap_html = create_multilevel_mindmap_html(tree, center_title=tree["name"])
+    html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive Spark Map - {topic}").encode("utf-8")
 
     st.session_state[ss_key] = mindmap_html
     st.session_state[ss_cit_key] = citations
@@ -327,7 +378,7 @@ st.markdown(f"**Generation time:** {elapsed:.2f} seconds")
 st.download_button(
     label="Download Spark Map as HTML",
     data=html_file,
-    file_name=f"{concept.replace(' ', '_')}_BubbleDive_SparkMap.html",
+    file_name=f"{topic.replace(' ', '_')}_BubbleDive_SparkMap.html",
     mime="text/html"
 )
 
