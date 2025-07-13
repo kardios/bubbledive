@@ -2,13 +2,15 @@ import streamlit as st
 from openai import OpenAI
 import json
 import re
+import time
 
 st.set_page_config(page_title="BubbleDive", layout="wide")
-st.title("🌊 BubbleDive: Argument Explorer")
-st.caption("Surfacing controversies, open questions, and new debates—powered by GPT-4.1 with live web search.")
+st.title("🌊 BubbleDive: Topic Explorer")
+st.caption("Switch modes to see either a debate-driven or deconstruction-driven map. Powered by GPT-4.1 with live web search.")
 
 client = OpenAI()
 
+# --- Utility Functions ---
 def truncate_tooltip(tooltip, max_len=120):
     if not tooltip:
         return ""
@@ -231,85 +233,117 @@ def full_html_wrap(mindmap_html, citations, title="BubbleDive Mindmap"):
     """
     return html
 
-def prompt_expand_concept_insightful(concept, context=""):
-    context_instruction = ""
-    if context:
-        context_instruction = f"Context: {context}. "
+# --- Prompts for both modes ---
+def prompt_expand_concept_understanding(concept, context=""):
+    context_instruction = f"Context: {context}. " if context else ""
     return (
-        f"For the topic '{concept}', {context_instruction}"
-        "generate a mindmap that highlights the most interesting arguments, debates, controversies, open questions, and emerging trends—"
-        "not just a factual summary. Each node should be a genuinely thought-provoking topic, recent scholarly disagreement, revisionist interpretation, or "
-        "critical question in the field. Include: "
-        "- Major controversies or scholarly debates "
-        "- Myths or misunderstandings and their corrections "
-        "- Shifts in historical consensus or reinterpretations "
-        "- Links to modern relevance or current debates "
-        "- At least three nodes must be open questions or unresolved issues. "
-        "Root node should have a concise, punchy summary (≤120 chars). "
+        f"You are an explainer for smart, curious readers. For the topic '{concept}', {context_instruction}"
+        "generate a mindmap that will help someone deeply *understand* the topic by revealing: "
+        "- Key debates and why they matter "
+        "- The biggest open questions "
+        "- Myths or common misconceptions and their reality "
+        "- Surprising or overlooked perspectives "
+        "- How the topic connects to modern issues "
+        "Each node must be either a debate, an open question, a misconception, or a modern connection—not just a fact. "
+        "For each node, provide a short, clear label and a 1-sentence tooltip explaining *why this aspect is important or interesting*. "
+        "Group nodes by type: e.g., 'Debates', 'Open Questions', 'Myths', 'Modern Relevance'. "
+        "Root node should be a 1-sentence summary of the topic’s enduring interest. "
         "Output as valid JSON: {{'name': '...', 'tooltip': '...', 'children': [...]}}"
-        "Cite sources and output clickable references. Do NOT include citation numbers in tooltips or node names."
+        "Cite clickable sources at the end."
     )
 
+def prompt_expand_concept_deconstruction(concept, context=""):
+    context_instruction = f"Context: {context}. " if context else ""
+    return (
+        f"You are a brilliant explainer. For the topic '{concept}', {context_instruction}"
+        "create a mindmap that deconstructs the topic into its key components and relationships to aid understanding. "
+        "Organize the map with clear thematic branches, such as: "
+        "- Key actors or elements "
+        "- Chronological events or process steps "
+        "- Main causes and effects "
+        "- Important concepts and terminology "
+        "- Sources of evidence or data "
+        "- Major interpretations or schools of thought "
+        "Each node must have a concise label and a 1-sentence tooltip explaining its role or significance. "
+        "The map should help a smart, curious reader *comprehend* the full structure and logic of the topic, not just memorize facts. "
+        "Root node: a short summary of the topic’s big picture. "
+        "Output as valid JSON: {{'name': '...', 'tooltip': '...', 'children': [...]}}"
+    )
+
+# --- Main UI ---
 params = st.query_params
 default_concept = params.get("concept", [""])[0] if params.get("concept") else ""
 default_context = params.get("context", [""])[0] if params.get("context") else ""
 concept = st.text_input("🔎 Enter a topic or event:", value=default_concept, key="concept_input")
-context = default_context  # Not shown to user by default, but passed by bubble click
+context = default_context  # For bubble clicks
 
-# SESSION LOGIC
-needs_update = (
-    'last_concept' not in st.session_state or
-    st.session_state['last_concept'] != concept or
-    'mindmap_html' not in st.session_state or
-    'citations' not in st.session_state or
-    'html_file' not in st.session_state
-)
+mode = st.radio("Map Type", ["Argument/Insight Map", "Deconstruction Map"], horizontal=True)
+
+# Key for session_state
+ss_key = f"bd_map_{concept}_{mode}"
+ss_cit_key = f"bd_cit_{concept}_{mode}"
+ss_html_key = f"bd_html_{concept}_{mode}"
+ss_time_key = f"bd_time_{concept}_{mode}"
 
 if not concept.strip():
-    st.info("Enter a topic and press Enter to generate an argument/debate mindmap.")
+    st.info("Enter a topic and press Enter to generate a mindmap.")
     st.stop()
 
-if needs_update:
-    with st.spinner("Surfacing the most interesting arguments and controversies..."):
-        prompt = prompt_expand_concept_insightful(concept.strip(), context)
+if (
+    ss_key not in st.session_state or
+    ss_cit_key not in st.session_state or
+    ss_html_key not in st.session_state or
+    ss_time_key not in st.session_state
+):
+    # LLM + Map step
+    if mode == "Argument/Insight Map":
+        prompt = prompt_expand_concept_understanding(concept.strip(), context)
+    else:
+        prompt = prompt_expand_concept_deconstruction(concept.strip(), context)
+    t0 = time.perf_counter()
+    with st.spinner("Generating mindmap..."):
         response = client.responses.create(
             model="gpt-4.1",
             tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
             input=prompt,
         )
-        output_items = response.output
-        output_text = ""
-        citations = []
-        for item in output_items:
-            if getattr(item, "type", "") == "message":
-                for content in getattr(item, "content", []):
-                    if getattr(content, "type", "") == "output_text":
-                        output_text = getattr(content, "text", "")
-                        if hasattr(content, "annotations"):
-                            citations = content.annotations
-        tree = robust_json_extract(output_text)
-        if not tree:
-            st.error("Could not extract mindmap from model output.")
-            st.stop()
-        tree = process_tree_tooltips(tree, max_len=120)
-        mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
-        html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}").encode("utf-8")
+    t1 = time.perf_counter()
+    output_items = response.output
+    output_text = ""
+    citations = []
+    for item in output_items:
+        if getattr(item, "type", "") == "message":
+            for content in getattr(item, "content", []):
+                if getattr(content, "type", "") == "output_text":
+                    output_text = getattr(content, "text", "")
+                    if hasattr(content, "annotations"):
+                        citations = content.annotations
+    tree = robust_json_extract(output_text)
+    if not tree:
+        st.error("Could not extract mindmap from model output.")
+        st.stop()
+    tree = process_tree_tooltips(tree, max_len=120)
+    mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
+    html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}").encode("utf-8")
 
-        st.session_state['last_concept'] = concept
-        st.session_state['mindmap_html'] = mindmap_html
-        st.session_state['citations'] = citations
-        st.session_state['html_file'] = html_file
+    st.session_state[ss_key] = mindmap_html
+    st.session_state[ss_cit_key] = citations
+    st.session_state[ss_html_key] = html_file
+    st.session_state[ss_time_key] = t1 - t0
 
-mindmap_html = st.session_state['mindmap_html']
-citations = st.session_state['citations']
-html_file = st.session_state['html_file']
+mindmap_html = st.session_state[ss_key]
+citations = st.session_state[ss_cit_key]
+html_file = st.session_state[ss_html_key]
+elapsed = st.session_state[ss_time_key]
 
 st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+
+st.markdown(f"**Generation time:** {elapsed:.2f} seconds")
 
 st.download_button(
     label="Download Mindmap as HTML",
     data=html_file,
-    file_name=f"{concept.replace(' ', '_')}_BubbleDive.html",
+    file_name=f"{concept.replace(' ', '_')}_BubbleDive_{mode.replace('/', '')}.html",
     mime="text/html"
 )
 
