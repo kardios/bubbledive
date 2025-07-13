@@ -198,9 +198,9 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
 def full_html_wrap(mindmap_html, citations, title="BubbleDive Mindmap"):
     citations_html = "<h3>References</h3>\n<ul>"
     for idx, cite in enumerate(citations, 1):
-        url = cite.get("url", "#")
-        title_cite = cite.get("title", url)
-        snippet = cite.get("snippet", "")
+        url = getattr(cite, "url", "#")
+        title_cite = getattr(cite, "title", url)
+        snippet = getattr(cite, "snippet", "")
         citations_html += f'<li><a href="{url}" target="_blank">{title_cite}</a>'
         if snippet:
             citations_html += f" – {snippet}"
