@@ -4,9 +4,9 @@ import json
 import re
 import time
 
-st.set_page_config(page_title="BubbleDive", layout="wide")
-st.title("🌊 BubbleDive: Topic Explorer")
-st.caption("Switch modes to see either a debate-driven or deconstruction-driven map. Powered by GPT-4.1 with live web search.")
+st.set_page_config(page_title="BubbleDive Spark Map", layout="wide")
+st.title("🌊 BubbleDive: Spark Map")
+st.caption("Distill any topic into its five most powerful insights. Click bubbles to dive deeper.")
 
 client = OpenAI()
 
@@ -197,7 +197,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     """
     return mindmap_html
 
-def full_html_wrap(mindmap_html, citations, title="BubbleDive Mindmap"):
+def full_html_wrap(mindmap_html, citations, title="BubbleDive Spark Map"):
     citations_html = "<h3>References</h3>\n<ul>"
     for idx, cite in enumerate(citations, 1):
         url = getattr(cite, "url", "#")
@@ -233,41 +233,18 @@ def full_html_wrap(mindmap_html, citations, title="BubbleDive Mindmap"):
     """
     return html
 
-# --- Prompts for both modes ---
-def prompt_expand_concept_understanding(concept, context=""):
+# --- Spark Map Prompt ---
+def prompt_expand_concept_sparkmap(concept, context=""):
     context_instruction = f"Context: {context}. " if context else ""
     return (
-        f"You are an explainer for smart, curious readers. For the topic '{concept}', {context_instruction}"
-        "generate a mindmap that will help someone deeply *understand* the topic by revealing: "
-        "- Key debates and why they matter "
-        "- The biggest open questions "
-        "- Myths or common misconceptions and their reality "
-        "- Surprising or overlooked perspectives "
-        "- How the topic connects to modern issues "
-        "Each node must be either a debate, an open question, a misconception, or a modern connection—not just a fact. "
-        "For each node, provide a short, clear label and a 1-sentence tooltip explaining *why this aspect is important or interesting*. "
-        "Group nodes by type: e.g., 'Debates', 'Open Questions', 'Myths', 'Modern Relevance'. "
-        "Root node should be a 1-sentence summary of the topic’s enduring interest. "
+        f"You are a master teacher whose goal is to make smart people care about and remember the topic '{concept}'. {context_instruction}"
+        "Create a Spark Map that distills the topic into the 5 most powerful insights—each a key idea that changes how people see the subject, reveals something surprising, or corrects a big myth. "
+        "For each main bubble, provide a short, striking label (max 8 words) and a 1-sentence tooltip that explains why this is an 'aha!' or perspective shift. "
+        "For each main insight, add 2-3 supporting sub-bubbles with memorable examples, surprising facts, analogies, or famous misconceptions. "
+        "Keep all tooltips short, punchy, and designed to spark further curiosity—not just summarize. "
+        "Do NOT include neutral background or padding; only what sparks learning and interest. "
         "Output as valid JSON: {{'name': '...', 'tooltip': '...', 'children': [...]}}"
-        "Cite clickable sources at the end."
-    )
-
-def prompt_expand_concept_deconstruction(concept, context=""):
-    context_instruction = f"Context: {context}. " if context else ""
-    return (
-        f"You are a brilliant explainer. For the topic '{concept}', {context_instruction}"
-        "create a mindmap that deconstructs the topic into its key components and relationships to aid understanding. "
-        "Organize the map with clear thematic branches, such as: "
-        "- Key actors or elements "
-        "- Chronological events or process steps "
-        "- Main causes and effects "
-        "- Important concepts and terminology "
-        "- Sources of evidence or data "
-        "- Major interpretations or schools of thought "
-        "Each node must have a concise label and a 1-sentence tooltip explaining its role or significance. "
-        "The map should help a smart, curious reader *comprehend* the full structure and logic of the topic, not just memorize facts. "
-        "Root node: a short summary of the topic’s big picture. "
-        "Output as valid JSON: {{'name': '...', 'tooltip': '...', 'children': [...]}}"
+        "End with clickable source references."
     )
 
 # --- Main UI ---
@@ -277,16 +254,13 @@ default_context = params.get("context", [""])[0] if params.get("context") else "
 concept = st.text_input("🔎 Enter a topic or event:", value=default_concept, key="concept_input")
 context = default_context  # For bubble clicks
 
-mode = st.radio("Map Type", ["Argument/Insight Map", "Deconstruction Map"], horizontal=True)
-
-# Key for session_state
-ss_key = f"bd_map_{concept}_{mode}"
-ss_cit_key = f"bd_cit_{concept}_{mode}"
-ss_html_key = f"bd_html_{concept}_{mode}"
-ss_time_key = f"bd_time_{concept}_{mode}"
+ss_key = f"sparkmap_{concept}"
+ss_cit_key = f"sparkmap_cit_{concept}"
+ss_html_key = f"sparkmap_html_{concept}"
+ss_time_key = f"sparkmap_time_{concept}"
 
 if not concept.strip():
-    st.info("Enter a topic and press Enter to generate a mindmap.")
+    st.info("Enter a topic and press Enter to generate a Spark Map.")
     st.stop()
 
 if (
@@ -295,13 +269,9 @@ if (
     ss_html_key not in st.session_state or
     ss_time_key not in st.session_state
 ):
-    # LLM + Map step
-    if mode == "Argument/Insight Map":
-        prompt = prompt_expand_concept_understanding(concept.strip(), context)
-    else:
-        prompt = prompt_expand_concept_deconstruction(concept.strip(), context)
+    prompt = prompt_expand_concept_sparkmap(concept.strip(), context)
     t0 = time.perf_counter()
-    with st.spinner("Generating mindmap..."):
+    with st.spinner("Generating Spark Map..."):
         response = client.responses.create(
             model="gpt-4.1",
             tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
@@ -320,11 +290,11 @@ if (
                         citations = content.annotations
     tree = robust_json_extract(output_text)
     if not tree:
-        st.error("Could not extract mindmap from model output.")
+        st.error("Could not extract Spark Map from model output.")
         st.stop()
     tree = process_tree_tooltips(tree, max_len=120)
     mindmap_html = create_multilevel_mindmap_html(tree, center_title=concept)
-    html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive - {concept}").encode("utf-8")
+    html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive Spark Map - {concept}").encode("utf-8")
 
     st.session_state[ss_key] = mindmap_html
     st.session_state[ss_cit_key] = citations
@@ -341,9 +311,9 @@ st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
 st.markdown(f"**Generation time:** {elapsed:.2f} seconds")
 
 st.download_button(
-    label="Download Mindmap as HTML",
+    label="Download Spark Map as HTML",
     data=html_file,
-    file_name=f"{concept.replace(' ', '_')}_BubbleDive_{mode.replace('/', '')}.html",
+    file_name=f"{concept.replace(' ', '_')}_BubbleDive_SparkMap.html",
     mime="text/html"
 )
 
