@@ -310,8 +310,11 @@ if context_json:
 else:
     topic = get_query_param("concept")
 
-if not topic:
+if not topic or not topic.strip():
     topic = st.text_input("🔎 Enter a topic or event:", value="", key="concept_input")
+    if not topic.strip():
+        st.info("Enter a topic and press Enter to generate a Spark Map.")
+        st.stop()
 else:
     topic = st.text_input("🔎 Enter a topic or event:", value=topic, key="concept_input")
 
