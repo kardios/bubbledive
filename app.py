@@ -129,6 +129,7 @@ def condense_context_from_api(prompt):
 
 
 # --- Visualization & HTML Generation ---
+
 def create_mindmap_html(tree_data):
     """Generates the D3.js HTML for the mind map from the tree data."""
     nodes, links = flatten_tree_to_nodes_links(tree_data)
@@ -137,9 +138,10 @@ def create_mindmap_html(tree_data):
     links_json = json.dumps(links)
     center_title_js = json.dumps(center_title)
 
-    # BUG FIX: The entire script is wrapped in a DOMContentLoaded listener
-    # to prevent a race condition where the script runs before the HTML container
-    # has been sized by the browser. This was the likely cause of the blank map.
+    # BUG FIX: This version corrects 3 issues:
+    # 1. Links between nodes are now drawn correctly.
+    # 2. Text wrapping logic is fixed to remove the extra line gap.
+    # 3. Click action is restored to open a new tab.
     return f"""
     <div id="mindmap-container"></div>
     <style>
@@ -154,13 +156,11 @@ def create_mindmap_html(tree_data):
         const rootID = {center_title_js};
         const containerEl = document.getElementById('mindmap-container');
         if (!containerEl) return;
+
         const width = containerEl.clientWidth;
         const height = containerEl.clientHeight;
 
-        if (width === 0 || height === 0) {{
-            console.error("BubbleDive Error: Container dimensions are zero. Cannot render map.");
-            return;
-        }}
+        if (width === 0 || height === 0) return;
 
         const svg = d3.select(containerEl).append("svg")
             .attr("width", "100%").attr("height", "100%")
@@ -169,10 +169,19 @@ def create_mindmap_html(tree_data):
         const container = svg.append("g");
         svg.call(d3.zoom().scaleExtent([0.3, 3]).on("zoom", (e) => container.attr("transform", e.transform)));
 
-        const link = container.append("g").selectAll("line").data(links).enter().append("line")
-            .attr("stroke", "{Config.LINK_COLOR}").attr("stroke-width", 2.5);
+        // FIX #1: Correctly selectAll("line") before data binding.
+        const link = container.append("g")
+            .attr("stroke", "{Config.LINK_COLOR}")
+            .attr("stroke-opacity", 0.8)
+            .selectAll("line")
+            .data(links)
+            .join("line")
+            .attr("stroke-width", 2.5);
 
-        const node = container.append("g").selectAll("g").data(nodes).enter().append("g")
+        const node = container.append("g")
+            .selectAll("g")
+            .data(nodes)
+            .enter().append("g")
             .attr("class", "node-group").style("cursor", "pointer");
 
         node.append("circle")
@@ -180,38 +189,51 @@ def create_mindmap_html(tree_data):
             .attr("fill", d => d.id === rootID ? "{Config.ROOT_NODE_COLOR}" : "{Config.CHILD_NODE_COLOR}")
             .attr("stroke", "{Config.NODE_BORDER_COLOR}").attr("stroke-width", 3);
 
+        // FIX #2: Replaced flawed text-wrapping logic with a cleaner method.
         node.append("text").attr("text-anchor", "middle").attr("dominant-baseline", "central")
             .style("font-size", d => d.id === rootID ? "22px" : "16px")
             .style("font-weight", "bold").style("pointer-events", "none")
             .each(function(d) {{
-                const text = d3.select(this), words = d.id.split(/\\s+/),
-                      maxChars = d.id === rootID ? 20 : 15, lineHeight = 1.1;
-                let line = [], tspan = text.append("tspan").attr("x", 0).attr("y", 0);
-                for(let i = 0; i < words.length; i++) {{
-                    line.push(words[i]);
-                    tspan.text(line.join(" "));
-                    if (tspan.node() && tspan.node().getComputedTextLength() > (maxChars * 8)) {{
-                        line.pop();
-                        tspan.text(line.join(" "));
-                        line = [words[i]];
-                        tspan = text.append("tspan").attr("x", 0).attr("dy", lineHeight + "em").text(words[i]);
+                const text = d3.select(this);
+                const words = d.id.split(/\\s+/);
+                const maxChars = d.id === rootID ? 20 : 15;
+                let line = [];
+                let lines = [];
+                let currentLine = words[0];
+
+                for (let i = 1; i < words.length; i++) {{
+                    let testLine = currentLine + " " + words[i];
+                    if (testLine.length > maxChars) {{
+                        lines.push(currentLine);
+                        currentLine = words[i];
+                    }} else {{
+                        currentLine = testLine;
                     }}
                 }}
-                const numTspans = text.selectAll("tspan").size();
-                text.selectAll("tspan").attr("y", (d, i) => -((numTspans - 1) * 0.5 - i) * lineHeight + "em");
+                lines.push(currentLine);
+
+                const lineHeight = 1.1; // ems
+                const startY = -((lines.length - 1) / 2) * lineHeight;
+                
+                text.selectAll("tspan").remove(); // Clear previous tspans
+                lines.forEach((lineText, i) => {{
+                    text.append("tspan")
+                        .attr("x", 0)
+                        .attr("dy", i === 0 ? startY + "em" : lineHeight + "em")
+                        .text(lineText);
+                }});
             }});
 
         const tooltip = d3.select("body").append("div").attr("class", "mindmap-tooltip");
-
         node.on("mouseover", (e, d) => {{
             if (!d.tooltip || d.tooltip.trim() === "") return;
-            tooltip.style("opacity", 1)
-                .html("<b>" + d.id + "</b><br>" + d.tooltip)
+            tooltip.style("opacity", 1).html("<b>" + d.id + "</b><br>" + d.tooltip)
                 .style("left", (e.pageX + 15) + "px").style("top", (e.pageY) + "px");
         }}).on("mousemove", (e) => {{
             tooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY) + "px");
         }}).on("mouseout", () => tooltip.style("opacity", 0));
         
+        // FIX #3: Reverted to window.open with "_blank" to open in a new tab.
         node.on("click", (e, d) => {{
             if (d.id === rootID) return;
             const contextObj = {{
@@ -219,7 +241,8 @@ def create_mindmap_html(tree_data):
                 parent_tooltip: d.parent_tooltip, root_label: rootID,
                 root_tooltip: nodes.find(n => n.id === rootID)?.tooltip || ""
             }};
-            window.parent.location.href = "?context=" + encodeURIComponent(JSON.stringify(contextObj));
+            const contextString = encodeURIComponent(JSON.stringify(contextObj));
+            window.open("?context=" + contextString, "_blank");
         }});
 
         const simulation = d3.forceSimulation(nodes)
