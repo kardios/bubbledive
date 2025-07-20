@@ -4,339 +4,433 @@ import json
 import re
 import time
 
-# --- Constants & Configuration ---
-class Config:
-    PAGE_TITLE = "BubbleDive SparkMap"
-    APP_TITLE = "🌊 BubbleDive: SparkMap"
-    APP_CAPTION = "Distill any topic into its most powerful insights. Click bubbles to dive deeper."
-    MODEL = "gpt-4.1"
-    MAX_TOOLTIP_LEN = 120
-    MINDMAP_BG_COLOR = "#f7faff"
-    ROOT_NODE_COLOR = "#93c5fd"
-    CHILD_NODE_COLOR = "#ffffff"
-    LINK_COLOR = "#b8cfff"
-    NODE_BORDER_COLOR = "#528fff"
+st.set_page_config(page_title="BubbleDive SparkMap", layout="wide")
+st.title("🌊 BubbleDive: SparkMap")
+st.caption("Distill any topic into its most powerful insights. Click bubbles to dive deeper.")
+
+# --- Reset Button ---
+if st.button("🔄 Start a New SparkMap"):
+    st.query_params.clear()
+    st.rerun()
 
 client = OpenAI()
 
-st.set_page_config(page_title=Config.PAGE_TITLE, layout="wide")
+def truncate_tooltip(tooltip, max_len=120):
+    if not tooltip:
+        return ""
+    tooltip = tooltip.replace("\n", " ").replace("\r", " ").strip()
+    if len(tooltip) <= max_len:
+        return tooltip
+    cutoff = tooltip[:max_len].rfind(" ")
+    return tooltip[:cutoff] + "..." if cutoff > 0 else tooltip[:max_len] + "..."
 
-
-# --- Data Processing & Helper Functions ---
-
-def truncate_text(text, max_len):
-    if not text: return ""
-    text = text.replace("\n", " ").replace("\r", " ").strip()
-    if len(text) <= max_len: return text
-    cutoff = text[:max_len].rfind(" ")
-    return text[:cutoff] + "..." if cutoff > 0 else text[:max_len] + "..."
-
-def process_tree_tooltips(tree, max_len):
+def process_tree_tooltips(tree, max_len=120):
     tree = dict(tree)
-    tree['tooltip'] = truncate_text(tree.get('tooltip', ''), max_len)
+    tree['tooltip'] = truncate_tooltip(tree.get('tooltip', ''), max_len)
     if 'children' in tree:
         tree['children'] = [process_tree_tooltips(child, max_len) for child in tree['children']]
     return tree
 
-def flatten_tree_to_nodes_links(tree, parent=None, nodes=None, links=None):
-    if nodes is None: nodes = []
-    if links is None: links = []
-    node_id = tree.get("name")
-    nodes.append({
-        "id": node_id, "tooltip": tree.get("tooltip", ""), "type": tree.get("type", ""),
-        "parent": parent["id"] if parent else None,
-        "parent_tooltip": parent["tooltip"] if parent else None
-    })
-    if parent:
-        links.append({"source": parent["id"], "target": node_id})
-    for child in tree.get("children", []) or []:
-        child_node_info = {"id": child.get("name"), "tooltip": child.get("tooltip", "")}
-        flatten_tree_to_nodes_links(child, child_node_info, nodes, links)
-    return nodes, links
-
-def robust_json_extract(raw_text):
-    match = re.search(r'```json\s*(\{[\s\S]+\})\s*```|(\{[\s\S]+\})', raw_text)
-    if not match: return None
-    json_str = match.group(1) or match.group(2)
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError:
-        st.error("Failed to decode the JSON from the AI's response."); st.code(json_str)
-        return None
-
-def create_text_representation(node, level=0):
-    text = ""
+def tree_to_text_outline(node, level=0):
+    """Recursively converts the mindmap tree to an indented text outline."""
     indent = "    " * level
-    tooltip = f" - {node.get('tooltip', '')}" if node.get('tooltip') else ""
-    text += f"{indent}- {node.get('name', 'Untitled')}{tooltip}\n"
+    text = f"{indent}- {node.get('name', 'Untitled')}\n"
+    tooltip = node.get('tooltip', '').strip()
+    if tooltip:
+        text += f"{indent}  ({tooltip})\n"
+    
     if 'children' in node and node['children']:
         for child in node['children']:
-            text += create_text_representation(child, level + 1)
+            text += tree_to_text_outline(child, level + 1)
     return text
 
+def flatten_tree_to_nodes_links(tree, parent_name=None, parent_tooltip=None, nodes=None, links=None):
+    if nodes is None: nodes = []
+    if links is None: links = []
+    this_id = tree.get("name")
+    tooltip = tree.get("tooltip", "")
+    node_type = tree.get("type", "")
+    nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type,
+                  "parent": parent_name, "parent_tooltip": parent_tooltip})
+    if parent_name:
+        links.append({"source": parent_name, "target": this_id})
+    for child in tree.get("children", []) or []:
+        flatten_tree_to_nodes_links(child, this_id, tooltip, nodes, links)
+    return nodes, links
 
-# --- AI & Prompting Functions ---
+def create_multilevel_mindmap_html(tree, center_title="Root"):
+    nodes, links = flatten_tree_to_nodes_links(tree)
+    for n in nodes:
+        n["group"] = 0 if n["id"] == center_title else 1
 
-def get_sparkmap_prompt(concept, context=""):
-    context_instruction = f"Context: {context}. " if context else ""
-    return (
-        f"You are a master educator. Your task is to create a SparkMap about '{concept}'. {context_instruction}"
-        "A SparkMap distills any topic into its 5 to 7 most powerful, perspective-shifting insights. "
-        "Each main bubble must deliver an 'aha!' moment. For each, provide a short label (max 8 words) and a 1-sentence tooltip. "
-        "For each main insight, add 2–3 sub-bubbles (examples, analogies, misconceptions). "
-        "Output the entire map as a valid JSON object wrapped in ```json markdown. The JSON must have this structure: {'name': '...', 'tooltip': '...', 'children': [...]}. "
-        "End with clickable source references."
-    )
-
-def get_context_condensation_prompt(context_obj):
-    return (
-        "You are a learning assistant. Given the following information from a mindmap, generate a single, specific topic or phrase (max 10 words) "
-        f"that focuses on the 'Clicked Bubble', using the Parent and Topic for context. This phrase will become the root of a new SparkMap.\n\n"
-        f"Topic: {context_obj.get('root_label', '')}\n{context_obj.get('root_tooltip', '')}\n\n"
-        f"Parent: {context_obj.get('parent_label', '')}\n{context_obj.get('parent_tooltip', '')}\n\n"
-        f"Clicked Bubble: {context_obj.get('clicked_label', '')}\n{context_obj.get('clicked_tooltip', '')}\n\n"
-        "Instructions: Output ONLY a concise topic phrase—no questions, sentences, or summaries."
-    )
-
-def generate_sparkmap_from_api(prompt):
-    try:
-        response = client.responses.create(
-            model=Config.MODEL,
-            tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
-            input=prompt,
-        )
-        output_text, citations = "", []
-        for item in response.output:
-            if getattr(item, "type", "") == "message":
-                for content in getattr(item, "content", []):
-                    if getattr(content, "type", "") == "output_text":
-                        output_text = getattr(content, "text", "")
-                        if hasattr(content, "annotations"):
-                            citations = content.annotations
-        return output_text, citations
-    except Exception as e:
-        st.error(f"An error occurred with the OpenAI API: {e}")
-        return None, []
-
-def condense_context_from_api(prompt):
-    try:
-        response = client.responses.create(model=Config.MODEL, input=prompt)
-        topic = response.output[0].content[0].text.strip().split('\n')[0]
-        return topic
-    except Exception as e:
-        st.error(f"An error occurred while condensing context: {e}")
-        return None
-
-
-# --- Visualization & HTML Generation ---
-
-def create_mindmap_html(tree_data):
-    """Generates the D3.js HTML for the mind map from the tree data."""
-    nodes, links = flatten_tree_to_nodes_links(tree_data)
-    center_title = tree_data.get("name", "Root")
     nodes_json = json.dumps(nodes)
     links_json = json.dumps(links)
-    center_title_js = json.dumps(center_title)
-
-    # BUG FIX: This version corrects 3 issues:
-    # 1. Links between nodes are now drawn correctly.
-    # 2. Text wrapping logic is fixed to remove the extra line gap.
-    # 3. Click action is restored to open a new tab.
-    return f"""
-    <div id="mindmap-container"></div>
+    center_title_js = center_title.replace("\\", "\\\\").replace("`", "\\`").replace('"', '\\"')
+    mindmap_html = f"""
+    <div id="mindmap"></div>
     <style>
-        #mindmap-container {{ width: 100%; height: 880px; min-height: 700px; background: {Config.MINDMAP_BG_COLOR}; border-radius: 18px; border: 1px solid #e0e0e0; }}
-        .mindmap-tooltip {{ position: absolute; pointer-events: none; z-index: 10; background: #fff; border: 1.5px solid {Config.NODE_BORDER_COLOR}; border-radius: 8px; padding: 10px 13px; font-size: 1em; color: #2c4274; box-shadow: 0 2px 12px rgba(60,100,180,0.15); opacity: 0; transition: opacity 0.18s; max-width: 280px; word-break: break-word; white-space: pre-line; }}
+    #mindmap {{ width:100%; height:880px; min-height:700px; background:#f7faff; border-radius:18px; }}
+    .tooltip-glossary {{
+        position: absolute; pointer-events: none; background: #fff; border: 1.5px solid #4f7cda; border-radius: 8px;
+        padding: 10px 13px; font-size: 1em; color: #2c4274; box-shadow: 0 2px 12px rgba(60,100,180,0.15); z-index: 10;
+        opacity: 0; transition: opacity 0.18s; max-width: 240px; word-break: break-word; white-space: pre-line;
+    }}
     </style>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script>
-    document.addEventListener("DOMContentLoaded", function() {{
-        const nodes = {nodes_json};
-        const links = {links_json};
-        const rootID = {center_title_js};
-        const containerEl = document.getElementById('mindmap-container');
-        if (!containerEl) return;
+    const nodes = {nodes_json};
+    const links = {links_json};
+    const width = 1400, height = 900;
+    const rootID = "{center_title_js}";
 
-        const width = containerEl.clientWidth;
-        const height = containerEl.clientHeight;
+    function getNodeColor(type, id) {{
+        if (id === rootID) return "#93c5fd"; // lighter blue for central node
+        return "#fff";
+    }}
 
-        if (width === 0 || height === 0) return;
+    const svg = d3.select("#mindmap").append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .style("background", "#f7faff");
 
-        const svg = d3.select(containerEl).append("svg")
-            .attr("width", "100%").attr("height", "100%")
-            .attr("viewBox", "0 0 " + width + " " + height);
+    const container = svg.append("g");
 
-        const container = svg.append("g");
-        svg.call(d3.zoom().scaleExtent([0.3, 3]).on("zoom", (e) => container.attr("transform", e.transform)));
+    svg.call(
+        d3.zoom()
+          .scaleExtent([0.3, 2.5])
+          .on("zoom", (event) => container.attr("transform", event.transform))
+    );
 
-        // FIX #1: Correctly selectAll("line") before data binding.
-        const link = container.append("g")
-            .attr("stroke", "{Config.LINK_COLOR}")
-            .attr("stroke-opacity", 0.8)
-            .selectAll("line")
-            .data(links)
-            .join("line")
-            .attr("stroke-width", 2.5);
+    const link = container.append("g")
+        .selectAll("line").data(links).enter().append("line")
+        .attr("stroke", "#b8cfff").attr("stroke-width", 2);
 
-        const node = container.append("g")
-            .selectAll("g")
-            .data(nodes)
-            .enter().append("g")
-            .attr("class", "node-group").style("cursor", "pointer");
+    const node = container.append("g")
+        .selectAll("g")
+        .data(nodes).enter().append("g")
+        .attr("class", "node");
 
-        node.append("circle")
-            .attr("r", d => d.id === rootID ? 120 : 70)
-            .attr("fill", d => d.id === rootID ? "{Config.ROOT_NODE_COLOR}" : "{Config.CHILD_NODE_COLOR}")
-            .attr("stroke", "{Config.NODE_BORDER_COLOR}").attr("stroke-width", 3);
-
-        // FIX #2: Replaced flawed text-wrapping logic with a cleaner method.
-        node.append("text").attr("text-anchor", "middle").attr("dominant-baseline", "central")
-            .style("font-size", d => d.id === rootID ? "22px" : "16px")
-            .style("font-weight", "bold").style("pointer-events", "none")
-            .each(function(d) {{
-                const text = d3.select(this);
-                const words = d.id.split(/\\s+/);
-                const maxChars = d.id === rootID ? 20 : 15;
-                let line = [];
-                let lines = [];
-                let currentLine = words[0];
-
-                for (let i = 1; i < words.length; i++) {{
-                    let testLine = currentLine + " " + words[i];
-                    if (testLine.length > maxChars) {{
-                        lines.push(currentLine);
-                        currentLine = words[i];
-                    }} else {{
-                        currentLine = testLine;
-                    }}
-                }}
-                lines.push(currentLine);
-
-                const lineHeight = 1.1; // ems
-                const startY = -((lines.length - 1) / 2) * lineHeight;
-                
-                text.selectAll("tspan").remove(); // Clear previous tspans
-                lines.forEach((lineText, i) => {{
-                    text.append("tspan")
-                        .attr("x", 0)
-                        .attr("dy", i === 0 ? startY + "em" : lineHeight + "em")
-                        .text(lineText);
-                }});
-            }});
-
-        const tooltip = d3.select("body").append("div").attr("class", "mindmap-tooltip");
-        node.on("mouseover", (e, d) => {{
-            if (!d.tooltip || d.tooltip.trim() === "") return;
-            tooltip.style("opacity", 1).html("<b>" + d.id + "</b><br>" + d.tooltip)
-                .style("left", (e.pageX + 15) + "px").style("top", (e.pageY) + "px");
-        }}).on("mousemove", (e) => {{
-            tooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY) + "px");
-        }}).on("mouseout", () => tooltip.style("opacity", 0));
-        
-        // FIX #3: Reverted to window.open with "_blank" to open in a new tab.
-        node.on("click", (e, d) => {{
-            if (d.id === rootID) return;
-            const contextObj = {{
-                clicked_label: d.id, clicked_tooltip: d.tooltip, parent_label: d.parent,
-                parent_tooltip: d.parent_tooltip, root_label: rootID,
-                root_tooltip: nodes.find(n => n.id === rootID)?.tooltip || ""
+    node.append("circle")
+        .attr("r", d => d.id === rootID ? 130 : 75)
+        .attr("fill", d => getNodeColor(d.type, d.id))
+        .attr("stroke", "#528fff").attr("stroke-width", 3)
+        .on("mouseover", function(e, d) {{
+            if(d.tooltip) {{
+                tooltip.style("opacity", 1).html("<b>" + d.id + "</b><br>" + d.tooltip)
+                    .style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
+            }}
+        }})
+        .on("mousemove", function(e) {{
+            tooltip.style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
+        }})
+        .on("mouseout", function(e, d) {{
+            tooltip.style("opacity", 0);
+        }})
+        .on("click", function(e, d) {{
+            if (d.id === rootID) return; // Central bubble: do nothing
+            let contextObj = {{
+                clicked_label: d.id,
+                clicked_tooltip: d.tooltip,
+                parent_label: d.parent,
+                parent_tooltip: d.parent_tooltip,
+                root_label: rootID,
+                root_tooltip: nodes.find(n=>n.id===rootID)?.tooltip || ""
             }};
+            if (d.parent === rootID) {{
+                contextObj.parent_label = "";
+                contextObj.parent_tooltip = "";
+            }}
             const contextString = encodeURIComponent(JSON.stringify(contextObj));
-            window.open("?context=" + contextString, "_blank");
+            window.open(`?context=${{contextString}}`, "_blank");
         }});
 
-        const simulation = d3.forceSimulation(nodes)
-            .force("link", d3.forceLink(links).id(d => d.id).distance(d => d.source.id === rootID ? 250 : 160).strength(1.2))
-            .force("charge", d3.forceManyBody().strength(-1200))
-            .force("center", d3.forceCenter(width / 2, height / 2))
-            .force("collision", d3.forceCollide().radius(d => (d.id === rootID ? 120 : 70) + 10));
-
-        simulation.on("tick", () => {{
-            link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
-                .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
-            node.attr("transform", d => "translate(" + d.x + "," + d.y + ")");
+    node.append("text")
+        .attr("text-anchor", "middle")
+        .each(function(d) {{
+            const text = d3.select(this);
+            const maxChars = 16;
+            const maxLines = 4;
+            const fontSize = d.id === rootID ? 24 : 20; // px
+            const label = d.id;
+            const words = label.split(' ');
+            let lines = [];
+            let current = '';
+            words.forEach(word => {{
+                if ((current + ' ' + word).trim().length > maxChars) {{
+                    lines.push(current.trim());
+                    current = word;
+                }} else {{
+                    current += ' ' + word;
+                }}
+            }});
+            if (current.trim()) lines.push(current.trim());
+            if (lines.length > maxLines) {{
+                lines = lines.slice(0, maxLines);
+                lines[maxLines - 1] += "...";
+            }}
+            text.style("font-size", fontSize + "px");
+            const startDy = -((lines.length - 1) / 2) * 1.1;
+            lines.forEach((line, i) => {{
+                text.append("tspan")
+                    .attr("x", 0)
+                    .attr("dy", i === 0 ? `${{startDy}}em` : "1.1em")
+                    .text(line);
+            }});
         }});
 
-        node.call(d3.drag()
-            .on("start", (e,d) => {{ if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }})
-            .on("drag", (e,d) => {{ d.fx = e.x; d.fy = e.y; }})
-            .on("end", (e,d) => {{ if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }})
-        );
+    node.call(
+      d3.drag()
+        .on("start", dragstarted)
+        .on("drag", dragged)
+        .on("end", dragended)
+    );
+
+    function dragstarted(event, d) {{
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+    }}
+    function dragged(event, d) {{
+        d.fx = event.x;
+        d.fy = event.y;
+    }}
+    function dragended(event, d) {{
+        if (!event.active) simulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+    }}
+
+    const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(d => d.source === rootID ? 270 : 180))
+        .force("charge", d3.forceManyBody().strength(-1400))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(82));
+
+    simulation.on("tick", () => {{
+        link
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y2", d => d.target.y);
+
+        node
+            .attr("transform", d => `translate(${{d.x}},${{d.y}})`);
     }});
+
+    const tooltip = d3.select("body").append("div")
+        .attr("class", "tooltip-glossary");
     </script>
     """
+    return mindmap_html
 
-def create_downloadable_html(mindmap_html, citations, topic):
-    citations_html = "<h3>References</h3>\n<ul>" + "".join([f'<li><a href="{getattr(c, "url", "#")}" target="_blank">{getattr(c, "title", "Source")}</a></li>' for c in citations]) + "</ul>"
-    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>BubbleDive SparkMap - {topic}</title><style>body{{font-family:sans-serif;margin:0;background:{Config.MINDMAP_BG_COLOR}}} .container{{max-width:1400px;margin:2rem auto;padding:1rem;background:#fff;border-radius:10px}}</style></head><body><div class="container"><h1>BubbleDive SparkMap: {topic}</h1>{mindmap_html}<hr>{citations_html}</div></body></html>"""
+def full_html_wrap(mindmap_html, citations, title="BubbleDive SparkMap"):
+    citations_html = "<h3>References</h3>\n<ul>"
+    for idx, cite in enumerate(citations, 1):
+        url = getattr(cite, "url", "#")
+        title_cite = getattr(cite, "title", url)
+        snippet = getattr(cite, "snippet", "")
+        citations_html += f'<li><a href="{url}" target="_blank">{title_cite}</a>'
+        if snippet:
+            citations_html += f" – {snippet}"
+        citations_html += "</li>"
+    citations_html += "</ul>"
 
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>{title}</title>
+        <style>
+            body {{ background:#f7faff; font-family:sans-serif; padding:0; margin:0; }}
+            .container {{ width:100vw; max-width:1600px; margin:0 auto; padding:24px; }}
+            h1 {{ margin-bottom: 10px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>{title}</h1>
+            {mindmap_html}
+            <hr>
+            {citations_html}
+        </div>
+    </body>
+    </html>
+    """
+    return html
 
-# --- Main Application Logic ---
+def prompt_expand_concept_sparkmap(concept, context=""):
+    context_instruction = f"Context: {context}. " if context else ""
+    return (
+        f"You are a master educator. Your task is to create a Spark Map mindmap about '{concept}'. {context_instruction}"
+        "A Spark Map distills any topic into its 5 to 7 most powerful, perspective-shifting insights. "
+        "Each main bubble must deliver an 'aha!' moment: a surprising fact, myth-buster, or insight that changes how a smart person sees the topic. "
+        "For each main bubble, provide a short, striking label (max 8 words) and a 1-sentence tooltip that explains why it matters or is surprising. "
+        "For each main insight, add 2–3 sub-bubbles: each must be an example, famous misconception, analogy, bold comparison, or surprising detail (not just background or generic info). "
+        "If and only if a sub-bubble’s idea is complex, you may add 1–2 supporting details beneath it—do not add a third level unless it makes the map significantly more enlightening. "
+        "Do not overload any single branch. If you cannot find 7 main insights, fewer is better; never pad with weak ideas. "
+        "At least one main bubble should compare or contrast this topic with others, or highlight a dramatic trend or change over time. "
+        "Use the ‘Spark Test’: Would an expert say ‘I didn’t know that!’ or ‘That changes my perspective’? If not, replace it with something stronger. "
+        "Keep all tooltips short, punchy, and designed to spark further curiosity. "
+        "Output the entire map as valid JSON: {'name': '...', 'tooltip': '...', 'children': [...]}. "
+        "End with clickable source references."
+    )
 
-def main():
-    st.title(Config.APP_TITLE)
-    st.caption(Config.APP_CAPTION)
-    if st.button("🔄 Start New Map"):
-        st.query_params.clear(); st.rerun()
+def condense_bubble_context(clicked_label, clicked_tooltip, parent_label, parent_tooltip, root_label, root_tooltip):
+    prompt = (
+        "You are a learning assistant. Given the following information from a mindmap, generate a single, specific topic or phrase (max 10 words) that focuses on the 'Clicked Bubble', using the Parent and Topic for context if needed. This phrase will become the root of a new Spark Map.\n\n"
+        f"Clicked Bubble:\n{clicked_label}\n{clicked_tooltip}\n\n"
+        f"Parent:\n{parent_label}\n{parent_tooltip}\n\n"
+        f"Topic:\n{root_label}\n{root_tooltip}\n\n"
+        "Instructions:\n"
+        "- Focus on the Clicked Bubble.\n"
+        "- Use Parent and Topic only to clarify meaning or specify context.\n"
+        "- Output only a concise topic phrase—no questions, no sentences, no summaries."
+    )
+    response = client.responses.create(
+        model="gpt-4.1",
+        input=prompt,
+    )
+    topic = response.output[0].content[0].text.strip().split('\n')[0]
+    return topic
 
-    topic = ""
-    if context_param := st.query_params.get("context"):
-        try:
-            context_obj = json.loads(context_param)
-            with st.spinner("Condensing context for the next dive..."):
-                prompt = get_context_condensation_prompt(context_obj)
-                topic = condense_context_from_api(prompt)
-                if topic:
-                    st.query_params.clear(); st.query_params["topic"] = topic
-        except (json.JSONDecodeError, TypeError):
-            st.warning("Invalid context in URL. Please start a new map.")
-            st.stop()
-    else:
-        topic = st.query_params.get("topic", "")
+def robust_json_extract(raw):
+    try:
+        return json.loads(raw)
+    except Exception:
+        m = re.search(r'(\{[\s\S]+\})', raw)
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except Exception:
+                pass
+    return None
 
-    user_topic = st.text_input("Enter a topic to explore:", value=topic, key="topic_input")
-    if not user_topic:
-        st.info("Enter a topic to generate your SparkMap."); st.stop()
+def get_query_param(key):
+    val = st.query_params.get(key, "")
+    if isinstance(val, list):
+        return val[0] if val else ""
+    elif isinstance(val, str):
+        return val
+    return ""
 
-    session_key = f"sparkmap_{user_topic.lower().strip()}"
-    if session_key not in st.session_state:
-        with st.spinner("🧠 Generating your SparkMap... This can take a moment."):
-            start_time = time.perf_counter()
-            prompt = get_sparkmap_prompt(user_topic)
-            response_text, citations = generate_sparkmap_from_api(prompt)
-            if not response_text:
-                st.error("Could not generate a map. Please try again."); st.stop()
+# ---- Main logic ----
+context_json = get_query_param("context")
+if context_json:
+    try:
+        context_obj = json.loads(context_json)
+        with st.spinner("Condensing for next dive..."):
+            topic = condense_bubble_context(
+                context_obj.get("clicked_label", ""),
+                context_obj.get("clicked_tooltip", ""),
+                context_obj.get("parent_label", ""),
+                context_obj.get("parent_tooltip", ""),
+                context_obj.get("root_label", ""),
+                context_obj.get("root_tooltip", ""),
+            )
+    except Exception as e:
+        st.warning("Could not parse context. Showing as plain text.")
+        topic = context_json
+else:
+    topic = get_query_param("concept")
 
-            tree_data = robust_json_extract(response_text)
-            if not tree_data:
-                st.error("Failed to parse the SparkMap from the model's output."); st.code(response_text); st.stop()
+if not topic or not topic.strip():
+    topic = st.text_input("Enter a topic:", value="", key="concept_input")
+    if not topic.strip():
+        st.info("Enter a topic and press Enter to generate a SparkMap.")
+        st.stop()
+else:
+    topic = st.text_input("Enter a topic:", value=topic, key="concept_input")
 
-            processed_tree = process_tree_tooltips(tree_data, Config.MAX_TOOLTIP_LEN)
-            safe_filename = re.sub(r'[\W_]+', '_', user_topic)
-            mindmap_html = create_mindmap_html(processed_tree)
-            st.session_state[session_key] = {
-                "mindmap_html": mindmap_html, "citations": citations,
-                "download_html": create_downloadable_html(mindmap_html, citations, user_topic).encode('utf-8'),
-                "download_txt": create_text_representation(tree_data).encode('utf-8'),
-                "filename_html": f"{safe_filename}_SparkMap.html", "filename_txt": f"{safe_filename}_SparkMap.txt",
-                "generation_time": time.perf_counter() - start_time
-            }
+ss_key = f"sparkmap_data_{topic}"
+ss_cit_key = f"sparkmap_cit_{topic}"
+ss_html_key = f"sparkmap_html_{topic}"
+ss_txt_key = f"sparkmap_txt_{topic}"
+ss_time_key = f"sparkmap_time_{topic}"
 
-    map_data = st.session_state[session_key]
-    st.components.v1.html(map_data["mindmap_html"], height=900, scrolling=False)
-
-    col1, col2, col3 = st.columns([1, 1, 3])
-    with col1: st.download_button("💾 Download HTML", map_data["download_html"], map_data["filename_html"], "text/html")
-    with col2: st.download_button("📝 Download TXT", map_data["download_txt"], map_data["filename_txt"], "text/plain")
-    with col3: st.write(f"**✨ Generated in:** {map_data['generation_time']:.2f} seconds")
-
-    if map_data["citations"]:
-        st.markdown("---"); st.subheader("References")
-        for i, cite in enumerate(map_data["citations"], 1):
-            st.markdown(f"{i}. [{getattr(cite, 'title', 'Source')}]({getattr(cite, 'url', '#')})")
+if (
+    ss_key not in st.session_state or
+    ss_cit_key not in st.session_state or
+    ss_html_key not in st.session_state or
+    ss_txt_key not in st.session_state or
+    ss_time_key not in st.session_state
+):
+    prompt = prompt_expand_concept_sparkmap(topic.strip())
+    t0 = time.perf_counter()
+    with st.spinner("Generating SparkMap..."):
+        response = client.responses.create(
+            model="gpt-4.1",
+            tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
+            input=prompt,
+        )
+    t1 = time.perf_counter()
+    output_items = response.output
+    output_text = ""
+    citations = []
+    for item in output_items:
+        if getattr(item, "type", "") == "message":
+            for content in getattr(item, "content", []):
+                if getattr(content, "type", "") == "output_text":
+                    output_text = getattr(content, "text", "")
+                    if hasattr(content, "annotations"):
+                        citations = content.annotations
+    tree = robust_json_extract(output_text)
+    if not tree:
+        st.error("Could not extract SparkMap from model output.")
+        st.stop()
     
-    st.markdown("---")
-    st.caption("BubbleDive © 2025. Click any bubble to expand it. Refreshing the page keeps your current map.")
+    tree = process_tree_tooltips(tree, max_len=120)
+    mindmap_html = create_multilevel_mindmap_html(tree, center_title=tree["name"])
+    safe_filename = re.sub(r'[^A-Za-z0-9_]+', '', topic.replace(' ', '_'))
+    
+    html_file = full_html_wrap(mindmap_html, citations, title=f"BubbleDive SparkMap - {topic}").encode("utf-8")
+    text_file = tree_to_text_outline(tree).encode("utf-8")
 
-if __name__ == "__main__":
-    main()
+    st.session_state[ss_key] = mindmap_html
+    st.session_state[ss_cit_key] = citations
+    st.session_state[ss_html_key] = html_file
+    st.session_state[ss_txt_key] = text_file
+    st.session_state[ss_time_key] = t1 - t0
+
+mindmap_html = st.session_state[ss_key]
+citations = st.session_state[ss_cit_key]
+html_file = st.session_state[ss_html_key]
+text_file = st.session_state[ss_txt_key]
+elapsed = st.session_state[ss_time_key]
+
+st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+
+st.markdown(f"**Generation time:** {elapsed:.2f} seconds")
+
+safe_filename = re.sub(r'[^A-Za-z0-9_]+', '', topic.replace(' ', '_'))
+col1, col2 = st.columns(2)
+
+with col1:
+    st.download_button(
+        label="Download SparkMap as HTML",
+        data=html_file,
+        file_name=f"{safe_filename}_BubbleDive_SparkMap.html",
+        mime="text/html",
+        use_container_width=True
+    )
+
+with col2:
+    st.download_button(
+        label="Download as TXT Outline",
+        data=text_file,
+        file_name=f"{safe_filename}_BubbleDive_SparkMap.txt",
+        mime="text/plain",
+        use_container_width=True
+    )
+
+
+if citations:
+    st.markdown("### References")
+    for idx, cite in enumerate(citations, 1):
+        url = getattr(cite, "url", "#")
+        title = getattr(cite, "title", url)
+        snippet = getattr(cite, "snippet", "")
+        st.markdown(f"{idx}. [{title}]({url})" + (f" – {snippet}" if snippet else ""))
+
+st.markdown("---")
+st.caption("BubbleDive © 2025. Click any bubble to expand it in a new tab (except the center one).")
