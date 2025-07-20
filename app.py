@@ -9,7 +9,6 @@ class Config:
     PAGE_TITLE = "BubbleDive SparkMap"
     APP_TITLE = "🌊 BubbleDive: SparkMap"
     APP_CAPTION = "Distill any topic into its most powerful insights. Click bubbles to dive deeper."
-    # REFACTOR: Set to the single, specified model
     MODEL = "gpt-4.1"
     MAX_TOOLTIP_LEN = 120
     MINDMAP_BG_COLOR = "#f7faff"
@@ -99,9 +98,7 @@ def get_context_condensation_prompt(context_obj):
         "Instructions: Output ONLY a concise topic phrase—no questions, sentences, or summaries."
     )
 
-# REFACTOR: Reverted to the user's original API call formulations.
 def generate_sparkmap_from_api(prompt):
-    """Calls the API to generate the main SparkMap data and citations."""
     try:
         response = client.responses.create(
             model=Config.MODEL,
@@ -122,23 +119,28 @@ def generate_sparkmap_from_api(prompt):
         return None, []
 
 def condense_context_from_api(prompt):
-    """Calls the API to condense the context into a new topic."""
     try:
-        response = client.responses.create(
-            model=Config.MODEL,
-            input=prompt,
-        )
+        response = client.responses.create(model=Config.MODEL, input=prompt)
         topic = response.output[0].content[0].text.strip().split('\n')[0]
         return topic
     except Exception as e:
         st.error(f"An error occurred while condensing context: {e}")
         return None
 
-# --- Visualization & HTML Generation (No changes in this section) ---
+
+# --- Visualization & HTML Generation ---
+
 def create_mindmap_html(tree_data):
+    """Generates the D3.js HTML for the mind map from the tree data."""
     nodes, links = flatten_tree_to_nodes_links(tree_data)
     center_title = tree_data.get("name", "Root")
-    nodes_json, links_json, center_title_js = json.dumps(nodes), json.dumps(links), json.dumps(center_title)
+    nodes_json = json.dumps(nodes)
+    links_json = json.dumps(links)
+    center_title_js = json.dumps(center_title)
+
+    # BUG FIX: The JS code is now un-minified and uses string concatenation
+    # instead of template literals (`${...}`) to avoid conflicts with Python's f-strings.
+    # All literal JS curly braces are escaped by doubling them, e.g., {{ ... }}.
     return f"""
     <div id="mindmap-container"></div>
     <style>
@@ -147,8 +149,96 @@ def create_mindmap_html(tree_data):
     </style>
     <script src="[https://d3js.org/d3.v7.min.js](https://d3js.org/d3.v7.min.js)"></script>
     <script>
-    (()=>{{const nodes={nodes_json},links={links_json},rootID={center_title_js},containerEl=document.getElementById("mindmap-container"),width=containerEl.clientWidth,height=containerEl.clientHeight,svg=d3.select(containerEl).append("svg").attr("width","100%").attr("height","100%").attr("viewBox",`0 0 ${{width}} ${{height}}`),container=svg.append("g");svg.call(d3.zoom().scaleExtent([.3,3]).on("zoom",e=>container.attr("transform",e.transform)));const link=container.append("g").selectAll("line").data(links).enter().append("line").attr("stroke","{Config.LINK_COLOR}").attr("stroke-width",2.5),node=container.append("g").selectAll("g").data(nodes).enter().append("g").attr("class","node-group").style("cursor","pointer");node.append("circle").attr("r",d=>d.id===rootID?120:70).attr("fill",d=>d.id===rootID?"{Config.ROOT_NODE_COLOR}":"{Config.CHILD_NODE_COLOR}").attr("stroke","{Config.NODE_BORDER_COLOR}").attr("stroke-width",3),node.append("text").attr("text-anchor","middle").attr("dominant-baseline","central").style("font-size",d=>d.id===rootID?"22px":"16px").style("font-weight","bold").style("pointer-events","none").each(function(d){{const t=d3.select(this),e=d.id.split(/\\s+/),o=d.id===rootID?20:15,s=1.1;let a=[],n=t.append("tspan").attr("x",0).attr("y",0);for(let d=0;d<e.length;d++)a.push(e[d]),n.text(a.join(" ")),n.node().getComputedTextLength()>8*o&&(a.pop(),n.text(a.join(" ")),a=[e[d]],n=t.append("tspan").attr("x",0).attr("dy",s+"em").text(e[d]));const l=t.selectAll("tspan").size();t.selectAll("tspan").attr("y",(t,d)=>-(.5*(l-1)-d)*s+"em")}});const tooltip=d3.select("body").append("div").attr("class","mindmap-tooltip");node.on("mouseover",(t,e)=>{{if(e.tooltip)return;tooltip.style("opacity",1).html(`<b>${{e.id}}</b><br>${{e.tooltip}}`).style("left",t.pageX+15+"px").style("top",t.pageY+"px")}}).on("mousemove",t=>{{tooltip.style("left",t.pageX+15+"px").style("top",t.pageY+"px")}}).on("mouseout",()=>tooltip.style("opacity",0)),node.on("click",(t,e)=>{{if(e.id===rootID)return;const o={{clicked_label:e.id,clicked_tooltip:e.tooltip,parent_label:e.parent,parent_tooltip:e.parent_tooltip,root_label:rootID,root_tooltip:nodes.find(t=>t.id===rootID)?.tooltip||""}};window.parent.location.href=`?context=${{encodeURIComponent(JSON.stringify(o))}}`}});const simulation=d3.forceSimulation(nodes).force("link",d3.forceLink(links).id(t=>t.id).distance(t=>t.source.id===rootID?250:160).strength(1.2)).force("charge",d3.forceManyBody().strength(-1200)).force("center",d3.forceCenter(width/2,height/2)).force("collision",d3.forceCollide().radius(t=>(t.id===rootID?120:70)+10));simulation.on("tick",()=>{{link.attr("x1",t=>t.source.x).attr("y1",t=>t.source.y).attr("x2",t=>t.target.x).attr("y2",t=>t.target.y),node.attr("transform",t=>`translate(${{t.x}},${{t.y}})`)}),node.call(d3.drag().on("start",(t,e)=>{{t.active||simulation.alphaTarget(.3).restart(),e.fx=e.x,e.fy=e.y}}).on("drag",(t,e)=>{{e.fx=t.x,e.fy=t.y}}).on("end",(t,e)=>{{t.active||simulation.alphaTarget(0),e.fx=null,e.fy=null}}))}})();
-    </script>"""
+    (() => {{
+        const nodes = {nodes_json};
+        const links = {links_json};
+        const rootID = {center_title_js};
+        const containerEl = document.getElementById('mindmap-container');
+        if (!containerEl) return;
+        const width = containerEl.clientWidth;
+        const height = containerEl.clientHeight;
+
+        const svg = d3.select(containerEl).append("svg")
+            .attr("width", "100%")
+            .attr("height", "100%")
+            .attr("viewBox", "0 0 " + width + " " + height);
+
+        const container = svg.append("g");
+        svg.call(d3.zoom().scaleExtent([0.3, 3]).on("zoom", (e) => container.attr("transform", e.transform)));
+
+        const link = container.append("g").selectAll("line").data(links).enter().append("line")
+            .attr("stroke", "{Config.LINK_COLOR}").attr("stroke-width", 2.5);
+
+        const node = container.append("g").selectAll("g").data(nodes).enter().append("g")
+            .attr("class", "node-group").style("cursor", "pointer");
+
+        node.append("circle")
+            .attr("r", d => d.id === rootID ? 120 : 70)
+            .attr("fill", d => d.id === rootID ? "{Config.ROOT_NODE_COLOR}" : "{Config.CHILD_NODE_COLOR}")
+            .attr("stroke", "{Config.NODE_BORDER_COLOR}").attr("stroke-width", 3);
+
+        node.append("text").attr("text-anchor", "middle").attr("dominant-baseline", "central")
+            .style("font-size", d => d.id === rootID ? "22px" : "16px")
+            .style("font-weight", "bold").style("pointer-events", "none")
+            .each(function(d) {{
+                const text = d3.select(this), words = d.id.split(/\\s+/),
+                      maxChars = d.id === rootID ? 20 : 15, lineHeight = 1.1;
+                let line = [], tspan = text.append("tspan").attr("x", 0).attr("y", 0);
+                for(let i = 0; i < words.length; i++) {{
+                    line.push(words[i]);
+                    tspan.text(line.join(" "));
+                    if (tspan.node().getComputedTextLength() > (maxChars * 8)) {{
+                        line.pop();
+                        tspan.text(line.join(" "));
+                        line = [words[i]];
+                        tspan = text.append("tspan").attr("x", 0).attr("dy", lineHeight + "em").text(words[i]);
+                    }}
+                }}
+                const numTspans = text.selectAll("tspan").size();
+                text.selectAll("tspan").attr("y", (d, i) => -((numTspans - 1) * 0.5 - i) * lineHeight + "em");
+            }});
+
+        const tooltip = d3.select("body").append("div").attr("class", "mindmap-tooltip");
+
+        node.on("mouseover", (e, d) => {{
+            if (!d.tooltip) return;
+            tooltip.style("opacity", 1)
+                .html("<b>" + d.id + "</b><br>" + d.tooltip)
+                .style("left", (e.pageX + 15) + "px").style("top", (e.pageY) + "px");
+        }}).on("mousemove", (e) => {{
+            tooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY) + "px");
+        }}).on("mouseout", () => tooltip.style("opacity", 0));
+        
+        node.on("click", (e, d) => {{
+            if (d.id === rootID) return;
+            const contextObj = {{
+                clicked_label: d.id, clicked_tooltip: d.tooltip, parent_label: d.parent,
+                parent_tooltip: d.parent_tooltip, root_label: rootID,
+                root_tooltip: nodes.find(n => n.id === rootID)?.tooltip || ""
+            }};
+            window.parent.location.href = "?context=" + encodeURIComponent(JSON.stringify(contextObj));
+        }});
+
+        const simulation = d3.forceSimulation(nodes)
+            .force("link", d3.forceLink(links).id(d => d.id).distance(d => d.source.id === rootID ? 250 : 160).strength(1.2))
+            .force("charge", d3.forceManyBody().strength(-1200))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("collision", d3.forceCollide().radius(d => (d.id === rootID ? 120 : 70) + 10));
+
+        simulation.on("tick", () => {{
+            link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+            node.attr("transform", d => "translate(" + d.x + "," + d.y + ")");
+        }});
+
+        node.call(d3.drag()
+            .on("start", (e,d) => {{ if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }})
+            .on("drag", (e,d) => {{ d.fx = e.x; d.fy = e.y; }})
+            .on("end", (e,d) => {{ if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }})
+        );
+    }})();
+    </script>
+    """
 
 def create_downloadable_html(mindmap_html, citations, topic):
     citations_html = "<h3>References</h3>\n<ul>" + "".join([f'<li><a href="{getattr(c, "url", "#")}" target="_blank">{getattr(c, "title", "Source")}</a></li>' for c in citations]) + "</ul>"
@@ -169,7 +259,6 @@ def main():
             context_obj = json.loads(context_param)
             with st.spinner("Condensing context for the next dive..."):
                 prompt = get_context_condensation_prompt(context_obj)
-                # REFACTOR: Using the reverted API call for context
                 topic = condense_context_from_api(prompt)
                 if topic:
                     st.query_params.clear(); st.query_params["topic"] = topic
@@ -188,7 +277,6 @@ def main():
         with st.spinner("🧠 Generating your SparkMap... This can take a moment."):
             start_time = time.perf_counter()
             prompt = get_sparkmap_prompt(user_topic)
-            # REFACTOR: Using the reverted API call for map generation
             response_text, citations = generate_sparkmap_from_api(prompt)
             if not response_text:
                 st.error("Could not generate a map. Please try again."); st.stop()
