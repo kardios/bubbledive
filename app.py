@@ -129,7 +129,6 @@ def condense_context_from_api(prompt):
 
 
 # --- Visualization & HTML Generation ---
-
 def create_mindmap_html(tree_data):
     """Generates the D3.js HTML for the mind map from the tree data."""
     nodes, links = flatten_tree_to_nodes_links(tree_data)
@@ -138,18 +137,18 @@ def create_mindmap_html(tree_data):
     links_json = json.dumps(links)
     center_title_js = json.dumps(center_title)
 
-    # BUG FIX: The JS code is now un-minified and uses string concatenation
-    # instead of template literals (`${...}`) to avoid conflicts with Python's f-strings.
-    # All literal JS curly braces are escaped by doubling them, e.g., {{ ... }}.
+    # BUG FIX: The entire script is wrapped in a DOMContentLoaded listener
+    # to prevent a race condition where the script runs before the HTML container
+    # has been sized by the browser. This was the likely cause of the blank map.
     return f"""
     <div id="mindmap-container"></div>
     <style>
         #mindmap-container {{ width: 100%; height: 880px; min-height: 700px; background: {Config.MINDMAP_BG_COLOR}; border-radius: 18px; border: 1px solid #e0e0e0; }}
         .mindmap-tooltip {{ position: absolute; pointer-events: none; z-index: 10; background: #fff; border: 1.5px solid {Config.NODE_BORDER_COLOR}; border-radius: 8px; padding: 10px 13px; font-size: 1em; color: #2c4274; box-shadow: 0 2px 12px rgba(60,100,180,0.15); opacity: 0; transition: opacity 0.18s; max-width: 280px; word-break: break-word; white-space: pre-line; }}
     </style>
-    <script src="[https://d3js.org/d3.v7.min.js](https://d3js.org/d3.v7.min.js)"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
     <script>
-    (() => {{
+    document.addEventListener("DOMContentLoaded", function() {{
         const nodes = {nodes_json};
         const links = {links_json};
         const rootID = {center_title_js};
@@ -158,9 +157,13 @@ def create_mindmap_html(tree_data):
         const width = containerEl.clientWidth;
         const height = containerEl.clientHeight;
 
+        if (width === 0 || height === 0) {{
+            console.error("BubbleDive Error: Container dimensions are zero. Cannot render map.");
+            return;
+        }}
+
         const svg = d3.select(containerEl).append("svg")
-            .attr("width", "100%")
-            .attr("height", "100%")
+            .attr("width", "100%").attr("height", "100%")
             .attr("viewBox", "0 0 " + width + " " + height);
 
         const container = svg.append("g");
@@ -187,7 +190,7 @@ def create_mindmap_html(tree_data):
                 for(let i = 0; i < words.length; i++) {{
                     line.push(words[i]);
                     tspan.text(line.join(" "));
-                    if (tspan.node().getComputedTextLength() > (maxChars * 8)) {{
+                    if (tspan.node() && tspan.node().getComputedTextLength() > (maxChars * 8)) {{
                         line.pop();
                         tspan.text(line.join(" "));
                         line = [words[i]];
@@ -201,7 +204,7 @@ def create_mindmap_html(tree_data):
         const tooltip = d3.select("body").append("div").attr("class", "mindmap-tooltip");
 
         node.on("mouseover", (e, d) => {{
-            if (!d.tooltip) return;
+            if (!d.tooltip || d.tooltip.trim() === "") return;
             tooltip.style("opacity", 1)
                 .html("<b>" + d.id + "</b><br>" + d.tooltip)
                 .style("left", (e.pageX + 15) + "px").style("top", (e.pageY) + "px");
@@ -236,7 +239,7 @@ def create_mindmap_html(tree_data):
             .on("drag", (e,d) => {{ d.fx = e.x; d.fy = e.y; }})
             .on("end", (e,d) => {{ if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }})
         );
-    }})();
+    }});
     </script>
     """
 
