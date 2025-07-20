@@ -5,7 +5,7 @@ import re
 import time
 
 st.set_page_config(page_title="BubbleDive SparkMap", layout="wide")
-st.title("🌊 BubbleDive: SparkMap")
+st.title("🌊 BubbleDive ✨ SparkMap ")
 st.caption("Distill any topic into its most powerful insights. Click bubbles to dive deeper.")
 
 # --- Reset Button ---
@@ -416,7 +416,7 @@ with col1:
 
 with col2:
     st.download_button(
-        label="Download as TXT Outline",
+        label="Download SparkMap as TXT Outline",
         data=text_file,
         file_name=f"{safe_filename}_BubbleDive_SparkMap.txt",
         mime="text/plain",
@@ -433,4 +433,4 @@ if citations:
         st.markdown(f"{idx}. [{title}]({url})" + (f" – {snippet}" if snippet else ""))
 
 st.markdown("---")
-st.caption("BubbleDive © 2025. Click any bubble to expand it in a new tab (except the center one).")
+st.caption("BubbleDive SparkMap © 2025. Click any bubble to expand it in a new tab (except the center one).")
